@@ -1,7 +1,7 @@
 # Minimal compliance config for LEAP hand rotation (fixed base, 4 fingertips)
 
 # Wrench simulation
-WrenchSimConfig.xml_path = "minimum_compliance/examples/descriptions/leap_hand_rotation/scene_fixed.xml"
+WrenchSimConfig.xml_path = "minimalist_compliance_control/examples/descriptions/leap_hand_rotation/scene_fixed.xml"
 WrenchSimConfig.site_names = ("if_tip", "mf_tip", "rf_tip", "th_tip")
 WrenchSimConfig.fixed_base = True
 WrenchSimConfig.view = False
@@ -40,19 +40,11 @@ ComplianceRefConfig.dt = 0.02
 ComplianceRefConfig.q_start_idx = 0
 ComplianceRefConfig.qd_start_idx = 0
 ComplianceRefConfig.ik_position_only = False
-ComplianceRefConfig.fixed_model_xml_path = "minimum_compliance/examples/descriptions/leap_hand_rotation/left_hand_fixed.xml"
+ComplianceRefConfig.fixed_model_xml_path = "minimalist_compliance_control/examples/descriptions/leap_hand_rotation/left_hand_fixed.xml"
 ComplianceRefConfig.mass = 1.0
 ComplianceRefConfig.inertia_diag = (1.0, 1.0, 1.0)
 ComplianceRefConfig.mink_num_iter = 5
 ComplianceRefConfig.mink_damping = 1e-2
-ComplianceRefConfig.ik_gains = @IKGains()
 ComplianceRefConfig.actuator_indices = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
 ComplianceRefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 ComplianceRefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-# IK gains (explicit defaults)
-IKGains.pos_kp = 100.0
-IKGains.pos_kd = 20.0
-IKGains.rot_kp = 5.0
-IKGains.rot_kd = 0.1
-IKGains.default_kp = 5.0

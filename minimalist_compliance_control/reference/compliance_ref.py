@@ -3,23 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Optional, Sequence
 
-# from typing import Callable
-from typing import Dict, List, Optional, Sequence, Tuple
-
+import gin
 import mujoco
 import numpy as np
+import numpy.typing as npt
+from scipy.spatial.transform import Rotation as R
 
-# import numpy.typing as npt
-import gin
-
-from minimum_compliance.reference.ik_solvers import (
-    IKGains,
-    JacobianIK,
-    MinkIK,
-    JointToActuatorFn,
-)
-from minimum_compliance.utils.array_utils import ArrayType, R, inplace_update
+from minimalist_compliance_control.reference.ik_solvers import JointToActuatorFn, MinkIK
 
 
 @dataclass(frozen=True)
@@ -39,6 +31,8 @@ class CommandLayout:
 
 COMMAND_LAYOUT = CommandLayout()
 
+StateDict = dict[str, Any]
+
 
 @gin.configurable
 class ComplianceReference:
@@ -50,21 +44,22 @@ class ComplianceReference:
         model: mujoco.MjModel,
         data: mujoco.MjData,
         site_names: Sequence[str],
-        actuator_indices: ArrayType,
-        joint_indices: ArrayType,
+        actuator_indices: npt.NDArray[np.int32],
+        joint_indices: npt.NDArray[np.int32],
         joint_to_actuator_fn: JointToActuatorFn,
-        default_motor_pos: ArrayType,
-        default_qpos: ArrayType,
-        fixed_model_xml_path: Optional[str] = None,
-        q_start_idx: int = 0,
-        qd_start_idx: int = 0,
-        ik_position_only: bool = False,
-        ik_gains: Optional[IKGains] = None,
-        mass: float = 1.0,
-        inertia_diag: ArrayType = (1.0, 1.0, 1.0),
-        mink_num_iter: int = 5,
-        mink_damping: float = 1e-2,
+        default_motor_pos: npt.NDArray[np.float32],
+        default_qpos: npt.NDArray[np.float32],
+        fixed_model_xml_path: Optional[str],
+        q_start_idx: int,
+        qd_start_idx: int,
+        ik_position_only: bool,
+        mass: float,
+        inertia_diag: npt.NDArray[np.float32],
+        mink_num_iter: int,
+        mink_damping: float,
     ) -> None:
+        del data
+
         self.dt = float(dt)
         self.control_dt = float(dt)
         self.model = model
@@ -84,25 +79,14 @@ class ComplianceReference:
         self.default_motor_pos = np.asarray(default_motor_pos, dtype=np.float32)
         self.default_qpos = np.asarray(default_qpos, dtype=np.float32)
 
-        self.site_ids = []
-        self.linvel_sensor_ids = []
-        self.angvel_sensor_ids = []
+        self.site_ids: list[int] = []
         for site_name in self.site_names:
             site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
             if site_id < 0:
                 raise ValueError(f"Site '{site_name}' not found in model.")
-            self.site_ids.append(site_id)
-            lin_id = mujoco.mj_name2id(
-                model, mujoco.mjtObj.mjOBJ_SENSOR, f"{site_name}_linvel"
-            )
-            ang_id = mujoco.mj_name2id(
-                model, mujoco.mjtObj.mjOBJ_SENSOR, f"{site_name}_angvel"
-            )
-            self.linvel_sensor_ids.append(int(lin_id))
-            self.angvel_sensor_ids.append(int(ang_id))
+            self.site_ids.append(int(site_id))
 
-        self.ik_position_only = ik_position_only
-        self.ik_gains = ik_gains or IKGains()
+        self.ik_position_only = bool(ik_position_only)
         self.mink_num_iter = int(mink_num_iter)
         self.mink_damping = float(mink_damping)
 
@@ -114,19 +98,6 @@ class ComplianceReference:
             self.fixed_data = mujoco.MjData(self.fixed_model)
             mink_model = self.fixed_model
 
-        self.jac_ik = JacobianIK(
-            model=model,
-            site_ids=self.site_ids,
-            linvel_sensor_ids=self.linvel_sensor_ids,
-            angvel_sensor_ids=self.angvel_sensor_ids,
-            q_start_idx=self.q_start_idx,
-            qd_start_idx=self.qd_start_idx,
-            joint_indices=self.joint_indices,
-            joint_to_actuator_fn=self.joint_to_actuator_fn,
-            mass=self.mass,
-            inertia_diag=self.inertia_diag,
-            gains=self.ik_gains,
-        )
         self.mink_ik = MinkIK(
             model=mink_model,
             site_names=self.site_names,
@@ -137,9 +108,9 @@ class ComplianceReference:
         )
 
         default_state = self.get_default_state()
-        self.site_home_pose = default_state["x_ref"].copy()
+        self.site_home_pose = np.asarray(default_state["x_ref"], dtype=np.float32).copy()
 
-    def get_default_state(self) -> Dict[str, ArrayType]:
+    def get_default_state(self) -> StateDict:
         num_sites = len(self.site_names)
         zeros = np.zeros((num_sites, 6), dtype=np.float32)
 
@@ -149,17 +120,9 @@ class ComplianceReference:
 
         home_pose = np.zeros((num_sites, 6), dtype=np.float32)
         for idx, site_id in enumerate(self.site_ids):
-            home_pose = inplace_update(
-                home_pose,
-                (idx, slice(0, 3)),
-                np.asarray(data.site(site_id).xpos, dtype=np.float32),
-            )
+            home_pose[idx, 0:3] = np.asarray(data.site(site_id).xpos, dtype=np.float32)
             rotmat = np.asarray(data.site(site_id).xmat, dtype=np.float32).reshape(3, 3)
-            home_pose = inplace_update(
-                home_pose,
-                (idx, slice(3, 6)),
-                R.from_matrix(rotmat).as_rotvec().astype(np.float32),
-            )
+            home_pose[idx, 3:6] = R.from_matrix(rotmat).as_rotvec().astype(np.float32)
 
         return {
             "name_to_idx": {name: idx for idx, name in enumerate(self.site_names)},
@@ -177,10 +140,16 @@ class ComplianceReference:
 
     def integrate_commands(
         self,
-        x_prev_unprojected: ArrayType,
-        v_prev: ArrayType,
-        command_matrix: ArrayType,
-    ) -> Tuple[ArrayType, ArrayType, ArrayType, ArrayType, ArrayType]:
+        x_prev_unprojected: npt.NDArray[np.float32],
+        v_prev: npt.NDArray[np.float32],
+        command_matrix: npt.NDArray[np.float32],
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.bool_],
+    ]:
         positions = command_matrix[:, COMMAND_LAYOUT.position]
         orientations = command_matrix[:, COMMAND_LAYOUT.orientation]
         measured_force = command_matrix[:, COMMAND_LAYOUT.measured_force]
@@ -223,57 +192,53 @@ class ComplianceReference:
         omega_next = omega_prev + ang_acc * self.dt
         ori_next = (R.from_rotvec(omega_next * self.dt) * ori_prev).as_rotvec()
 
-        x_next = inplace_update(x_next, (idx, slice(0, 3)), pos_next)
-        x_next = inplace_update(x_next, (idx, slice(3, 6)), ori_next)
-        v_next = inplace_update(v_next, (idx, slice(0, 3)), vel_next)
-        v_next = inplace_update(v_next, (idx, slice(3, 6)), omega_next)
-        a_next = inplace_update(a_next, (idx, slice(0, 3)), lin_acc)
-        a_next = inplace_update(a_next, (idx, slice(3, 6)), ang_acc)
-        x_next_unprojected = inplace_update(
-            x_next_unprojected, (idx, slice(0, 3)), pos_next
-        )
-        x_next_unprojected = inplace_update(
-            x_next_unprojected, (idx, slice(3, 6)), ori_next
-        )
-        # print(a_next)
+        x_next[idx, 0:3] = pos_next
+        x_next[idx, 3:6] = ori_next
+        v_next[idx, 0:3] = vel_next
+        v_next[idx, 3:6] = omega_next
+        a_next[idx, 0:3] = lin_acc
+        a_next[idx, 3:6] = ang_acc
+        x_next_unprojected[idx, 0:3] = pos_next
+        x_next_unprojected[idx, 3:6] = ori_next
+
         return x_next, v_next, a_next, x_next_unprojected, is_unreachable
 
     def get_actuator_ref(
         self,
         data: mujoco.MjData,
-        x_ref: ArrayType,
-        v_ref: ArrayType,
-        a_ref: ArrayType,
-    ) -> ArrayType:
-        if self.mink_ik is not None:
-            return self.mink_ik.solve(
-                data,
-                x_ref,
-                v_ref,
-                self.dt,
-                num_iter=self.mink_num_iter,
-                damping=self.mink_damping,
-            )
-        return self.jac_ik.solve(data, x_ref, v_ref, a_ref)
+        x_ref: npt.NDArray[np.float32],
+        v_ref: npt.NDArray[np.float32],
+        a_ref: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
+        del a_ref
+        return self.mink_ik.solve(
+            data,
+            x_ref,
+            v_ref,
+            self.dt,
+            num_iter=self.mink_num_iter,
+            damping=self.mink_damping,
+        )
 
     def get_state_ref(
         self,
-        time_curr: float | ArrayType,
-        command_matrix: ArrayType,
-        last_state: Dict[str, ArrayType],
+        time_curr: float | npt.NDArray[np.float32],
+        command_matrix: npt.NDArray[np.float32],
+        last_state: StateDict,
         model: mujoco.MjModel,
         data: mujoco.MjData,
-        site_names: Optional[List[str]] = None,
-        base_pos: Optional[ArrayType] = None,
-        base_quat: Optional[ArrayType] = None,
-    ) -> Dict[str, ArrayType]:
-        x_ref, v_ref, a_ref, x_ref_unprojected, unreachable_mask = (
-            self.integrate_commands(
-                last_state["x_ref_unprojected"],
-                last_state["v_ref"],
-                command_matrix,
-            )
+        site_names: Optional[list[str]] = None,
+        base_pos: Optional[npt.NDArray[np.float32]] = None,
+        base_quat: Optional[npt.NDArray[np.float32]] = None,
+    ) -> StateDict:
+        del time_curr, model, site_names
+
+        x_ref, v_ref, a_ref, x_ref_unprojected, unreachable_mask = self.integrate_commands(
+            np.asarray(last_state["x_ref_unprojected"], dtype=np.float32),
+            np.asarray(last_state["v_ref"], dtype=np.float32),
+            command_matrix,
         )
+
         base_pos_arr = (
             np.asarray(base_pos, dtype=np.float32)
             if base_pos is not None
@@ -285,12 +250,14 @@ class ComplianceReference:
             else np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
         )
         x_ref_for_ik = self.transform_x_ref_to_base_frame(
-            x_ref, base_pos_arr, base_rot_arr
+            x_ref,
+            base_pos_arr,
+            base_rot_arr,
         )
 
         actuator_pos = self.get_actuator_ref(data, x_ref_for_ik, v_ref, a_ref)
         motor_pos = self.default_motor_pos.copy()
-        motor_pos = inplace_update(motor_pos, self.actuator_indices, actuator_pos)
+        motor_pos[self.actuator_indices] = actuator_pos
 
         return {
             "name_to_idx": {name: idx for idx, name in enumerate(self.site_names)},
@@ -299,19 +266,24 @@ class ComplianceReference:
             "a_ref": a_ref,
             "x_ref_unprojected": x_ref_unprojected,
             "motor_pos": motor_pos,
-            "qpos": last_state.get("qpos", self.default_qpos.copy()),
+            "qpos": np.asarray(last_state.get("qpos", self.default_qpos.copy()), dtype=np.float32),
             "root_ref": np.zeros(3, dtype=np.float32),
             "root_ref_world": np.zeros(3, dtype=np.float32),
             "unreachable_mask": unreachable_mask,
-            "is_zero_force": np.logical_and(
-                np.any(command_matrix[:, COMMAND_LAYOUT.measured_force] == 0),
-                np.any(command_matrix[:, COMMAND_LAYOUT.measured_torque] == 0),
+            "is_zero_force": bool(
+                np.logical_and(
+                    np.any(command_matrix[:, COMMAND_LAYOUT.measured_force] == 0),
+                    np.any(command_matrix[:, COMMAND_LAYOUT.measured_torque] == 0),
+                )
             ),
         }
 
     def transform_x_ref_to_base_frame(
-        self, x_ref: ArrayType, base_pos: ArrayType, base_quat_wxyz: ArrayType
-    ) -> ArrayType:
+        self,
+        x_ref: npt.NDArray[np.float32],
+        base_pos: npt.NDArray[np.float32],
+        base_quat_wxyz: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
         base_pos = np.asarray(base_pos, dtype=np.float32).reshape(3)
         base_quat = np.asarray(base_quat_wxyz, dtype=np.float32).reshape(4)
         base_quat = base_quat / (np.linalg.norm(base_quat) + 1e-9)

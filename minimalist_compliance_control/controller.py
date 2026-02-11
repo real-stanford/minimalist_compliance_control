@@ -10,9 +10,12 @@ import numpy.typing as npt
 import gin
 import mujoco
 
-from minimum_compliance.wrench_estimation import WrenchEstimateConfig, estimate_wrench
-from minimum_compliance.wrench_sim import WrenchSim, WrenchSimConfig
-from minimum_compliance.reference.compliance_ref import (
+from minimalist_compliance_control.wrench_estimation import (
+    WrenchEstimateConfig,
+    estimate_wrench,
+)
+from minimalist_compliance_control.wrench_sim import WrenchSim, WrenchSimConfig
+from minimalist_compliance_control.reference.compliance_ref import (
     COMMAND_LAYOUT,
     ComplianceReference,
 )
@@ -58,7 +61,6 @@ class ControllerConfig:
 class ComplianceRefConfig:
     dt: float = 0.02
     ik_position_only: bool = False
-    ik_gains: Optional[object] = None
     mass: float = 1.0
     inertia_diag: Sequence[float] = (1.0, 1.0, 1.0)
     mink_num_iter: int = 5
@@ -212,7 +214,6 @@ class ComplianceController:
             q_start_idx=cfg.q_start_idx,
             qd_start_idx=cfg.qd_start_idx,
             ik_position_only=cfg.ik_position_only,
-            ik_gains=cfg.ik_gains,
             mass=cfg.mass,
             inertia_diag=cfg.inertia_diag,
             mink_num_iter=cfg.mink_num_iter,

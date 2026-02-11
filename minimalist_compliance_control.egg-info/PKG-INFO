@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: minimalist_compliance_control
+Version: 0.1.0
+Summary: Minimal compliance control and wrench estimation core.
+Author: Songbo Hu, Haochen Shi
+License: MIT
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.23
+Requires-Dist: scipy>=1.9
+Requires-Dist: mujoco>=2.3.7
+Requires-Dist: mink>=0.0.6
+Requires-Dist: gin-config>=0.5.0
+Dynamic: license-file
+
 # minimalist_compliance_control
 
 Minimal compliance control + wrench estimation core with a clean interface.
