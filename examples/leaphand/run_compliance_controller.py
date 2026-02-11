@@ -35,19 +35,21 @@ def _deep_update(d, u):
 
 
 def _load_motor_params(model):
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    )
-    default_path = os.path.join(
-        repo_root, "minimalist_compliance_control", "examples", "descriptions", "default.yml"
-    )
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    default_path = os.path.join(repo_root, "examples", "descriptions", "default.yml")
     robot_path = os.path.join(
         repo_root,
-        "minimalist_compliance_control",
         "examples",
         "descriptions",
-        "toddlerbot_2xm",
+        "leap_hand_rotation",
         "robot.yml",
+    )
+    motors_path = os.path.join(
+        repo_root,
+        "examples",
+        "descriptions",
+        "leap_hand_rotation",
+        "motors.yml",
     )
     with open(default_path, "r") as f:
         config = yaml.safe_load(f)
@@ -55,6 +57,10 @@ def _load_motor_params(model):
         robot_cfg = yaml.safe_load(f)
     if robot_cfg is not None:
         _deep_update(config, robot_cfg)
+    with open(motors_path, "r") as f:
+        motor_cfg = yaml.safe_load(f)
+    if motor_cfg is not None:
+        _deep_update(config, motor_cfg)
 
     kp_ratio = float(config["actuators"]["kp_ratio"])
     kd_ratio = float(config["actuators"]["kd_ratio"])
@@ -73,13 +79,18 @@ def _load_motor_params(model):
     tau_brake_max = []
     kd_min = []
     for name in names:
-        if name not in config["motors"]:
+        motor_key = name
+        if motor_key not in config["motors"] and motor_key.endswith("_act"):
+            base_key = motor_key[: -len("_act")]
+            if base_key in config["motors"]:
+                motor_key = base_key
+        if motor_key not in config["motors"]:
             raise ValueError(f"Missing motor config for actuator '{name}'")
-        motor_cfg = config["motors"][name]
+        motor_cfg = config["motors"][motor_key]
         motor_type = motor_cfg["motor"]
         act_cfg = config["actuators"][motor_type]
-        kp.append(float(motor_cfg["kp"]) / kp_ratio)
-        kd.append(float(motor_cfg["kd"]) / kd_ratio)
+        kp.append(float(motor_cfg.get("kp", 0.0)) / kp_ratio)
+        kd.append(float(motor_cfg.get("kd", 0.0)) / kd_ratio)
         tau_max.append(float(act_cfg["tau_max"]))
         q_dot_max.append(float(act_cfg["q_dot_max"]))
         tau_q_dot_max.append(float(act_cfg["tau_q_dot_max"]))
@@ -107,7 +118,7 @@ def main() -> None:
     gin.bind_parameter("WrenchSimConfig.view", True)
     gin.bind_parameter(
         "WrenchSimConfig.xml_path",
-        "minimalist_compliance_control/examples/descriptions/toddlerbot_2xm/scene.xml",
+        "examples/descriptions/leap_hand_rotation/scene_fixed.xml",
     )
     controller = ComplianceController(
         config=ControllerConfig(),
@@ -127,9 +138,32 @@ def main() -> None:
     num_sites = len(controller.config.site_names)
     command_matrix = np.zeros((num_sites, COMMAND_LAYOUT.width), dtype=np.float32)
     default_state = controller.compliance_ref.get_default_state()
-    home_pose = np.asarray(default_state["x_ref"], dtype=np.float32)
-    command_matrix[:, COMMAND_LAYOUT.position] = home_pose[:, :3]
-    command_matrix[:, COMMAND_LAYOUT.orientation] = home_pose[:, 3:6]
+    init_pos = np.array(
+        [
+            [0.052, -0.1, 0.247],
+            [0.052, -0.055, 0.247],
+            [0.052, -0.01, 0.247],
+            [-0.228, -0.094, 0.149],
+        ],
+        dtype=np.float32,
+    )
+    init_ori = np.array(
+        [
+            [-3.14, 0.0, 0.0],
+            [-3.14, 0.0, 0.0],
+            [-3.14, 0.0, 0.0],
+            [-0.07, 2.42, 0.02],
+        ],
+        dtype=np.float32,
+    )
+    init_pose = np.concatenate([init_pos, init_ori], axis=1)
+    command_matrix[:, COMMAND_LAYOUT.position] = init_pos
+    command_matrix[:, COMMAND_LAYOUT.orientation] = init_ori
+    default_state["x_ref"] = init_pose.copy()
+    default_state["x_ref_unprojected"] = init_pose.copy()
+    default_state["v_ref"] = np.zeros_like(default_state["v_ref"])
+    default_state["a_ref"] = np.zeros_like(default_state["a_ref"])
+    controller._last_state = default_state
     kp_pos = 150.0
     kp_rot = 5.0
     mass = float(controller.ref_config.mass)
@@ -174,7 +208,8 @@ def main() -> None:
     while True:
         t = time.time() - t0
         if t >= next_control_time:
-            command_matrix[:, COMMAND_LAYOUT.position] = home_pose[:, :3]
+            command_matrix[:, COMMAND_LAYOUT.position] = init_pos
+            command_matrix[:, COMMAND_LAYOUT.orientation] = init_ori
             inputs = ComplianceInputs(
                 motor_torques=np.asarray(data.actuator_force, dtype=np.float32),
                 qpos=np.asarray(data.qpos, dtype=np.float32),
@@ -185,7 +220,7 @@ def main() -> None:
             if "state_ref" in out:
                 target_motor_pos = np.asarray(out["state_ref"]["motor_pos"])
             if "wrenches" in out:
-                name = "right_hand_center"
+                name = "if_tip"
                 est = out["wrenches"].get(name)
                 if est is not None:
                     site_id = controller.wrench_sim.site_ids[name]

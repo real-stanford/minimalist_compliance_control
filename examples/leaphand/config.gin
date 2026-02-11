@@ -1,7 +1,7 @@
 # Minimal compliance config for LEAP hand rotation (fixed base, 4 fingertips)
 
 # Wrench simulation
-WrenchSimConfig.xml_path = "minimalist_compliance_control/examples/descriptions/leap_hand_rotation/scene_fixed.xml"
+WrenchSimConfig.xml_path = "examples/descriptions/leap_hand_rotation/scene_fixed.xml"
 WrenchSimConfig.site_names = ("if_tip", "mf_tip", "rf_tip", "th_tip")
 WrenchSimConfig.fixed_base = True
 WrenchSimConfig.view = False
@@ -40,7 +40,7 @@ ComplianceRefConfig.dt = 0.02
 ComplianceRefConfig.q_start_idx = 0
 ComplianceRefConfig.qd_start_idx = 0
 ComplianceRefConfig.ik_position_only = False
-ComplianceRefConfig.fixed_model_xml_path = "minimalist_compliance_control/examples/descriptions/leap_hand_rotation/left_hand_fixed.xml"
+ComplianceRefConfig.fixed_model_xml_path = "examples/descriptions/leap_hand_rotation/left_hand_fixed.xml"
 ComplianceRefConfig.mass = 1.0
 ComplianceRefConfig.inertia_diag = (1.0, 1.0, 1.0)
 ComplianceRefConfig.mink_num_iter = 5
