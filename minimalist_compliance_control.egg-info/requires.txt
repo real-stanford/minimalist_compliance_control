@@ -1,5 +1,0 @@
-numpy>=1.23
-scipy>=1.9
-mujoco>=2.3.7
-mink>=0.0.6
-gin-config>=0.5.0
