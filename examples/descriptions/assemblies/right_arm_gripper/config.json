@@ -1,0 +1,21 @@
+{
+    "document_id": "9d5acd05cb0e8be60d56ce56",
+    "output_format": "mujoco",
+    "robot_name": "right_arm_gripper",
+    "assembly_name": "arm",
+    "configuration": "Configuration=right_gripper",
+    "include_configuration_suffix": false,
+    "draw_frames": true,
+    "merge_stls": true,
+    "simplify_stls": true,
+    "maxSTLSize": 1,
+    "joint_properties": {
+        "gripper_pinion": {
+            "actuated": false
+        },
+        "gripper_pinion_mirror": {
+            "actuated": false
+        }
+    },
+    "equalities": {}
+}

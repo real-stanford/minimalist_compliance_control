@@ -1,0 +1,195 @@
+<?xml version="1.0" ?>
+<mujoco model="2xc_430_palm">
+  <compiler angle="radian" meshdir="assets" autolimits="true"/>
+  <default>
+    <default class="2xc_430_palm">
+      <joint frictionloss="0.1" armature="0.005"/>
+      <position kp="50" dampratio="1"/>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+      </default>
+      <default class="collision">
+        <geom group="3"/>
+      </default>
+    </default>
+  </default>
+  <worldbody>
+    <body name="torso" pos="0 0 0" quat="1 0 0 0" childclass="2xc_430_palm">
+      <freejoint name="torso_freejoint"/>
+      <inertial pos="-0.0185985 -0.00416082 0.0626827" mass="1.11503" fullinertia="0.00278052 0.00218904 0.0022486 7.15333e-05 4.19135e-06 -6.41579e-05"/>
+      <geom type="mesh" class="visual" pos="-0.0185985 -0.00416082 0.0626827" quat="1 0 0 0" mesh="torso_visual" material="torso_visual_material"/>
+      <geom type="mesh" class="collision" pos="-0.0185985 -0.00416082 0.0626827" quat="1 0 0 0" mesh="torso_collision" material="torso_collision_material"/>
+      <body name="neck_yaw_gear_drive" pos="-0.0215079 1.21597e-14 0.119" quat="3.7581e-14 -1 -1.24623e-14 1.17573e-14">
+        <joint axis="0 0 1" name="neck_yaw_drive" type="hinge" range="-2.8797932657906435 2.8797932657906435"/>
+        <inertial pos="1.84163e-18 -1.61971e-15 -0.0033841" mass="0.003" fullinertia="8.71388e-08 8.71388e-08 1.55295e-07 -1.01369e-37 6.75285e-37 1.49136e-36"/>
+        <geom type="mesh" class="visual" pos="3.46945e-18 -1.61971e-15 -0.0033841" quat="3.7581e-14 1 1.24623e-14 -1.17573e-14" mesh="neck_yaw_gear_drive_visual" material="neck_yaw_gear_drive_visual_material"/>
+        <geom type="mesh" class="collision" pos="3.46945e-18 -1.61971e-15 -0.0033841" quat="3.7581e-14 1 1.24623e-14 -1.17573e-14" mesh="neck_yaw_gear_drive_collision" material="neck_yaw_gear_drive_collision_material"/>
+      </body>
+      <body name="neck_yaw_link" pos="-0.00050787 -2.21939e-31 0.124" quat="1 7.19185e-16 1.05888e-14 -1.97951e-15">
+        <joint axis="0 0 1" name="neck_yaw_driven" type="hinge" range="-2.6179938779914944 2.6179938779914944"/>
+        <inertial pos="-3.4067e-06 -1.86e-09 0.00821562" mass="0.006" fullinertia="4.77698e-07 6.2064e-07 3.29073e-07 -3.8855e-15 2.24356e-09 -2.43334e-14"/>
+        <geom type="mesh" class="visual" pos="-3.4067e-06 -1.86e-09 0.00821562" quat="1 -7.17239e-16 -1.05332e-14 2.00527e-15" mesh="neck_yaw_link_visual" material="neck_yaw_link_visual_material"/>
+        <geom type="mesh" class="collision" pos="-3.4067e-06 -1.86e-09 0.00821562" quat="1 -7.17239e-16 -1.05332e-14 2.00527e-15" mesh="neck_yaw_link_collision" material="neck_yaw_link_collision_material"/>
+        <site group="3" name="closing_neck_pitch_front_2" pos="0.00724444 -0.004 0.0169411" quat="4.53068e-36 0 0.707107 0.707107"/>
+        <site group="3" name="closing_neck_pitch_front_2_z" pos="0.00724444 0.096 0.0169411" quat="4.53068e-36 0 0.707107 0.707107"/>
+        <site group="3" name="closing_neck_pitch_back_2" pos="-0.00724444 -0.004 0.0130589" quat="4.53068e-36 0 0.707107 0.707107"/>
+        <site group="3" name="closing_neck_pitch_back_2_z" pos="-0.00724444 0.096 0.0130589" quat="4.53068e-36 0 0.707107 0.707107"/>
+        <body name="head" pos="-2.60209e-18 0.004 0.015" quat="0.707107 -0.707107 0 3.06338e-31">
+          <joint axis="0 0 1" name="neck_pitch" type="hinge" range="-0.6108652381980767 1.3962634015954023"/>
+          <inertial pos="-0.0104852 -0.0447856 0.00111009" mass="0.143321" fullinertia="0.000108706 0.00012191 9.64039e-05 9.11996e-07 1.06384e-05 -1.64047e-06"/>
+          <geom type="mesh" class="visual" pos="-0.0104852 -0.0447856 0.00111009" quat="0.707107 0.707107 -9.10383e-15 -6.23239e-15" mesh="head_visual" material="head_visual_material"/>
+          <geom type="mesh" class="collision" pos="-0.0104852 -0.0447856 0.00111009" quat="0.707107 0.707107 -9.10383e-15 -6.23239e-15" mesh="head_collision" material="head_collision_material"/>
+          <body name="neck_pitch_plate" pos="-0.027 -0.0326157 -0.0025" quat="2.59256e-14 2.00467e-13 -1 1.17548e-13">
+            <joint axis="0 0 1" name="neck_pitch_act" type="hinge" range="-0.6108652381980207 1.3962634015954583"/>
+            <inertial pos="-2.11739e-18 4.20223e-17 0.00282818" mass="0.002" fullinertia="6.09113e-08 5.6539e-08 1.08464e-07 1.28339e-09 7.13565e-37 -2.11158e-36"/>
+            <geom type="mesh" class="visual" pos="-3.46945e-18 5.55112e-17 0.00282818" quat="1.69058e-13 -1.29653e-13 0.707107 -0.707107" mesh="neck_pitch_plate_visual" material="neck_pitch_plate_visual_material"/>
+            <geom type="mesh" class="collision" pos="-3.46945e-18 5.55112e-17 0.00282818" quat="1.69058e-13 -1.29653e-13 0.707107 -0.707107" mesh="neck_pitch_plate_collision" material="neck_pitch_plate_collision_material"/>
+            <body name="neck_rod" pos="-0.00723736 -0.0019674 0.0055" quat="0.94105 -1.23457e-13 1.79856e-14 0.338268">
+              <joint axis="0 0 1" name="neck_pitch_front" type="hinge" range="-18.488883882036344 6.643857346682001"/>
+              <inertial pos="-7.34078e-06 0.0211662 0.00159086" mass="0.00297389" fullinertia="9.56038e-07 1.72714e-08 9.68778e-07 4.62807e-10 -8.9204e-13 9.9499e-13"/>
+              <geom type="mesh" class="visual" pos="-7.34078e-06 0.0211662 0.00159086" quat="0.239192 -0.239192 -0.665423 0.665423" mesh="neck_rod_visual" material="neck_rod_visual_material"/>
+              <geom type="mesh" class="collision" pos="-7.34078e-06 0.0211662 0.00159086" quat="0.239192 -0.239192 -0.665423 0.665423" mesh="neck_rod_collision" material="neck_rod_collision_material"/>
+              <site group="3" name="closing_neck_pitch_front_1" pos="-4.48318e-05 0.042366 -3.3324e-15" quat="6.65053e-15 -0.707107 0.707107 4.7938e-15"/>
+              <site group="3" name="closing_neck_pitch_front_1_z" pos="-4.48318e-05 0.042366 -0.1" quat="6.65053e-15 -0.707107 0.707107 4.7938e-15"/>
+            </body>
+            <body name="neck_rod_2" pos="0.00723736 0.0019674 0.0055" quat="0.338608 -6.90437e-15 3.88578e-15 -0.940928">
+              <joint axis="0 0 1" name="neck_pitch_back" type="hinge" range="-12.206419459589227 12.926321769129117"/>
+              <inertial pos="6.03123e-06 -0.0211581 0.00159086" mass="0.00297389" fullinertia="9.55017e-07 1.72711e-08 9.67757e-07 3.79503e-10 7.32906e-13 -1.0247e-14"/>
+              <geom type="mesh" class="visual" pos="6.03123e-06 -0.0211581 0.00159086" quat="0.665336 -0.665336 0.239432 -0.239432" mesh="neck_rod_2_visual" material="neck_rod_2_visual_material"/>
+              <geom type="mesh" class="collision" pos="6.03123e-06 -0.0211581 0.00159086" quat="0.665336 -0.665336 0.239432 -0.239432" mesh="neck_rod_2_collision" material="neck_rod_2_collision_material"/>
+              <site group="3" name="closing_neck_pitch_back_1" pos="3.68341e-05 -0.0423165 -1.37529e-14" quat="3.37619e-14 0.707107 0.707107 3.5518e-14"/>
+              <site group="3" name="closing_neck_pitch_back_1_z" pos="3.68341e-05 -0.0423165 -0.1" quat="3.37619e-14 0.707107 0.707107 3.5518e-14"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="waist_gears" pos="-0.0165079 -3.46945e-18 -0.00248651" quat="1 1.98463e-16 0 1.17416e-15">
+        <joint axis="0 0 1" name="waist_yaw" type="hinge" range="-1.5707963267948895 1.5707963267949037"/>
+        <inertial pos="-2.81849e-10 1.55293e-09 -0.0129916" mass="0.0371617" fullinertia="2.6567e-06 1.19063e-05 1.15726e-05 4.54262e-13 -9.23141e-13 -1.27177e-12"/>
+        <geom type="mesh" class="visual" pos="-2.81849e-10 1.55293e-09 -0.0129916" quat="1 -1.98463e-16 0 -1.17416e-15" mesh="waist_gears_visual" material="waist_gears_visual_material"/>
+        <geom type="mesh" class="collision" pos="-2.81849e-10 1.55293e-09 -0.0129916" quat="1 -1.98463e-16 0 -1.17416e-15" mesh="waist_gears_collision" material="waist_gears_collision_material"/>
+        <body name="pelvis_link" pos="0.0230079 -6.46336e-18 -0.014" quat="0.5 0.5 0.5 0.5">
+          <joint axis="0 0 1" name="waist_roll" type="hinge" range="-0.5235987755983006 0.523598775598297"/>
+          <inertial pos="1.02385e-15 -0.0260806 -0.0231545" mass="0.1052" fullinertia="4.57052e-05 9.14349e-05 6.74285e-05 1.2688e-18 -5.62512e-09 4.46433e-07"/>
+          <geom type="mesh" class="visual" pos="1.02384e-15 -0.0260806 -0.0231545" quat="0.5 -0.5 -0.5 -0.5" mesh="pelvis_link_visual" material="pelvis_link_visual_material"/>
+          <geom type="mesh" class="collision" pos="1.02384e-15 -0.0260806 -0.0231545" quat="0.5 -0.5 -0.5 -0.5" mesh="pelvis_link_collision" material="pelvis_link_collision_material"/>
+          <body name="waist_gear_drive" pos="4.432e-17 -0.0196 -0.01275" quat="7.27851e-15 -8.13835e-15 0.707107 0.707107">
+            <joint axis="0 0 1" name="waist_act_1" type="hinge" range="-4.677482395344782 4.677482395344825"/>
+            <inertial pos="6.58783e-10 3.70003e-10 0.00671824" mass="0.002" fullinertia="3.70258e-08 3.70258e-08 3.95436e-08 -1.39638e-16 2.14499e-15 -3.4519e-16"/>
+            <geom type="mesh" class="visual" pos="6.58783e-10 3.70003e-10 0.00671824" quat="0.707107 -1.0317e-15 -3.33067e-16 0.707107" mesh="waist_gear_drive_visual" material="waist_gear_drive_visual_material"/>
+            <geom type="mesh" class="collision" pos="6.58783e-10 3.70003e-10 0.00671824" quat="0.707107 -1.0317e-15 -3.33067e-16 0.707107" mesh="waist_gear_drive_collision" material="waist_gear_drive_collision_material"/>
+          </body>
+          <body name="waist_gear_drive_2" pos="-2.56005e-16 -0.0196 -0.03275" quat="0.00755053 -0.00755053 -0.707066 -0.707066">
+            <joint axis="0 0 1" name="waist_act_2" type="hinge" range="-4.69883892561642 4.656125865073187"/>
+            <inertial pos="6.58783e-10 3.70003e-10 0.00671824" mass="0.002" fullinertia="3.70258e-08 3.70258e-08 3.95436e-08 -1.39638e-16 2.14499e-15 -3.4519e-16"/>
+            <geom type="mesh" class="visual" pos="6.58783e-10 3.70003e-10 0.00671824" quat="0.714617 -1.48043e-16 1.11022e-16 0.699516" mesh="waist_gear_drive_2_visual" material="waist_gear_drive_2_visual_material"/>
+            <geom type="mesh" class="collision" pos="6.58783e-10 3.70003e-10 0.00671824" quat="0.714617 -1.48043e-16 1.11022e-16 0.699516" mesh="waist_gear_drive_2_collision" material="waist_gear_drive_2_collision_material"/>
+          </body>
+          <body name="leg" pos="0.018 -0.0481 -0.02275" quat="0.499008 0.50099 0.499008 0.50099">
+            <joint axis="0 0 1" name="left_hip_pitch" type="hinge" range="-2.356194490192345 1.8325957145940461"/>
+            <inertial pos="-0.122039 -0.00745405 0.0191849" mass="0.534009" fullinertia="0.000279589 0.00341991 0.00357652 -0.000129287 -6.50627e-06 1.89425e-06"/>
+            <geom type="mesh" class="visual" pos="-0.122039 -0.00745405 0.0191849" quat="0.50099 0.50099 0.499008 0.499008" mesh="leg_visual" material="leg_visual_material"/>
+            <geom type="mesh" class="collision" pos="-0.122039 -0.00745405 0.0191849" quat="0.50099 0.50099 0.499008 0.499008" mesh="leg_collision" material="leg_collision_material"/>
+          </body>
+          <body name="leg_2" pos="-0.018 -0.0481 -0.02275" quat="0.495109 -0.504843 -0.495109 0.504843">
+            <joint axis="0 0 1" name="right_hip_pitch" type="hinge" range="-1.8325957145940186 2.3561944901923724"/>
+            <inertial pos="-0.122039 0.00765917 0.0191866" mass="0.534009" fullinertia="0.000277923 0.00341991 0.00357485 0.000117321 -6.4455e-06 -3.01742e-06"/>
+            <geom type="mesh" class="visual" pos="-0.122039 0.00765917 0.0191866" quat="0.495109 -0.495109 0.504843 -0.504843" mesh="leg_2_visual" material="leg_2_visual_material"/>
+            <geom type="mesh" class="collision" pos="-0.122039 0.00765917 0.0191866" quat="0.495109 -0.495109 0.504843 -0.504843" mesh="leg_2_collision" material="leg_2_collision_material"/>
+          </body>
+        </body>
+      </body>
+      <body name="arm" pos="-0.0200079 0.067 0.10175" quat="0.707107 -0.707107 -1.14353e-14 -4.91734e-15">
+        <joint axis="0 0 1" name="left_shoulder_pitch" type="hinge" range="-4.712388980384688 4.7123889803846915"/>
+        <inertial pos="-0.000453334 0.0964942 0.0334668" mass="0.481274" fullinertia="0.00260181 0.000175683 0.00256616 3.91696e-06 -4.94498e-07 9.12664e-05"/>
+        <geom type="mesh" class="visual" pos="-0.000453334 0.0964942 0.0334668" quat="0.707107 0.707107 1.16573e-14 4.91734e-15" mesh="arm_visual" material="arm_visual_material"/>
+        <geom type="mesh" class="collision" pos="-0.000453334 0.0964942 0.0334668" quat="0.707107 0.707107 1.16573e-14 4.91734e-15" mesh="arm_collision" material="arm_collision_material"/>
+      </body>
+      <body name="arm_2" pos="-0.0200079 -0.067 0.10175" quat="8.85792e-15 3.40227e-14 -0.707107 0.707107">
+        <joint axis="0 0 1" name="right_shoulder_pitch" type="hinge" range="-4.71238898038469 4.71238898038469"/>
+        <inertial pos="-0.000206921 0.0964943 0.0334667" mass="0.481274" fullinertia="0.00260182 0.000175763 0.00256624 -1.0554e-05 -2.55633e-07 9.12719e-05"/>
+        <geom type="mesh" class="visual" pos="-0.000206921 0.0964943 0.0334667" quat="8.85792e-15 -3.40245e-14 0.707107 -0.707107" mesh="arm_2_visual" material="arm_2_visual_material"/>
+        <geom type="mesh" class="collision" pos="-0.000206921 0.0964943 0.0334667" quat="8.85792e-15 -3.40245e-14 0.707107 -0.707107" mesh="arm_2_collision" material="arm_2_collision_material"/>
+      </body>
+    </body>
+  </worldbody>
+  <asset>
+    <mesh file="merged/torso_collision.stl"/>
+    <mesh file="merged/neck_yaw_gear_drive_visual.stl"/>
+    <mesh file="merged/waist_gear_drive_collision.stl"/>
+    <mesh file="merged/waist_gear_drive_2_collision.stl"/>
+    <mesh file="merged/neck_yaw_link_collision.stl"/>
+    <mesh file="merged/arm_2_collision.stl"/>
+    <mesh file="merged/pelvis_link_visual.stl"/>
+    <mesh file="merged/neck_pitch_plate_collision.stl"/>
+    <mesh file="merged/neck_yaw_gear_drive_collision.stl"/>
+    <mesh file="merged/arm_collision.stl"/>
+    <mesh file="merged/waist_gear_drive_2_visual.stl"/>
+    <mesh file="merged/waist_gears_collision.stl"/>
+    <mesh file="merged/leg_visual.stl"/>
+    <mesh file="merged/leg_2_collision.stl"/>
+    <mesh file="merged/leg_2_visual.stl"/>
+    <mesh file="merged/neck_rod_2_visual.stl"/>
+    <mesh file="merged/arm_visual.stl"/>
+    <mesh file="merged/torso_visual.stl"/>
+    <mesh file="merged/neck_rod_visual.stl"/>
+    <mesh file="merged/neck_rod_2_collision.stl"/>
+    <mesh file="merged/arm_2_visual.stl"/>
+    <mesh file="merged/neck_yaw_link_visual.stl"/>
+    <mesh file="merged/neck_pitch_plate_visual.stl"/>
+    <mesh file="merged/waist_gear_drive_visual.stl"/>
+    <mesh file="merged/head_collision.stl"/>
+    <mesh file="merged/leg_collision.stl"/>
+    <mesh file="merged/pelvis_link_collision.stl"/>
+    <mesh file="merged/waist_gears_visual.stl"/>
+    <mesh file="merged/head_visual.stl"/>
+    <mesh file="merged/neck_rod_collision.stl"/>
+    <material name="torso_visual_material" rgba="0.638217 0.79375 0.902047 1"/>
+    <material name="torso_collision_material" rgba="0.638217 0.79375 0.902047 1"/>
+    <material name="neck_yaw_gear_drive_visual_material" rgba="0.647059 0.647059 0.647059 1"/>
+    <material name="neck_yaw_gear_drive_collision_material" rgba="0.647059 0.647059 0.647059 1"/>
+    <material name="neck_yaw_link_visual_material" rgba="0.231373 0.380392 0.705882 1"/>
+    <material name="neck_yaw_link_collision_material" rgba="0.231373 0.380392 0.705882 1"/>
+    <material name="head_visual_material" rgba="0.628184 0.794414 0.875689 1"/>
+    <material name="head_collision_material" rgba="0.628184 0.794414 0.875689 1"/>
+    <material name="neck_pitch_plate_visual_material" rgba="0.647059 0.647059 0.647059 1"/>
+    <material name="neck_pitch_plate_collision_material" rgba="0.647059 0.647059 0.647059 1"/>
+    <material name="neck_rod_visual_material" rgba="0.62596 0.757827 0.836947 1"/>
+    <material name="neck_rod_collision_material" rgba="0.62596 0.757827 0.836947 1"/>
+    <material name="neck_rod_2_visual_material" rgba="0.62596 0.757827 0.836947 1"/>
+    <material name="neck_rod_2_collision_material" rgba="0.62596 0.757827 0.836947 1"/>
+    <material name="waist_gears_visual_material" rgba="0.307262 0.428048 0.687761 1"/>
+    <material name="waist_gears_collision_material" rgba="0.307262 0.428048 0.687761 1"/>
+    <material name="pelvis_link_visual_material" rgba="0.642812 0.76997 0.800997 1"/>
+    <material name="pelvis_link_collision_material" rgba="0.642812 0.76997 0.800997 1"/>
+    <material name="waist_gear_drive_visual_material" rgba="0.647059 0.647059 0.647059 1"/>
+    <material name="waist_gear_drive_collision_material" rgba="0.647059 0.647059 0.647059 1"/>
+    <material name="waist_gear_drive_2_visual_material" rgba="0.647059 0.647059 0.647059 1"/>
+    <material name="waist_gear_drive_2_collision_material" rgba="0.647059 0.647059 0.647059 1"/>
+    <material name="leg_visual_material" rgba="0.680751 0.663759 0.496403 1"/>
+    <material name="leg_collision_material" rgba="0.680751 0.663759 0.496403 1"/>
+    <material name="leg_2_visual_material" rgba="0.680751 0.663759 0.496403 1"/>
+    <material name="leg_2_collision_material" rgba="0.680751 0.663759 0.496403 1"/>
+    <material name="arm_visual_material" rgba="0.712619 0.815249 0.878257 1"/>
+    <material name="arm_collision_material" rgba="0.712619 0.815249 0.878257 1"/>
+    <material name="arm_2_visual_material" rgba="0.712619 0.815249 0.878257 1"/>
+    <material name="arm_2_collision_material" rgba="0.712619 0.815249 0.878257 1"/>
+  </asset>
+  <actuator>
+    <position class="2xc_430_palm" name="neck_yaw_drive" joint="neck_yaw_drive" inheritrange="1"/>
+    <position class="2xc_430_palm" name="neck_pitch_act" joint="neck_pitch_act" inheritrange="1"/>
+    <position class="2xc_430_palm" name="waist_act_1" joint="waist_act_1" inheritrange="1"/>
+    <position class="2xc_430_palm" name="waist_act_2" joint="waist_act_2" inheritrange="1"/>
+    <position class="2xc_430_palm" name="left_hip_pitch" joint="left_hip_pitch" inheritrange="1"/>
+    <position class="2xc_430_palm" name="right_hip_pitch" joint="right_hip_pitch" inheritrange="1"/>
+    <position class="2xc_430_palm" name="left_shoulder_pitch" joint="left_shoulder_pitch" inheritrange="1"/>
+    <position class="2xc_430_palm" name="right_shoulder_pitch" joint="right_shoulder_pitch" inheritrange="1"/>
+  </actuator>
+  <equality>
+    <connect site1="closing_neck_pitch_front_1" site2="closing_neck_pitch_front_2" solref="0.004 1" solimp="0.9999 0.9999 0.001 0.5 2"/>
+    <connect site1="closing_neck_pitch_front_1_z" site2="closing_neck_pitch_front_2_z" solref="0.004 1" solimp="0.9999 0.9999 0.001 0.5 2"/>
+    <connect site1="closing_neck_pitch_back_1" site2="closing_neck_pitch_back_2" solref="0.004 1" solimp="0.9999 0.9999 0.001 0.5 2"/>
+    <connect site1="closing_neck_pitch_back_1_z" site2="closing_neck_pitch_back_2_z" solref="0.004 1" solimp="0.9999 0.9999 0.001 0.5 2"/>
+    <joint joint1="neck_yaw_driven" joint2="neck_yaw_drive" polycoef="0 -0.9090909091 0 0 0"/>
+  </equality>
+</mujoco>

@@ -1,0 +1,35 @@
+{
+    "document_id": "565bc33af293a651f66e88d2",
+    "output_format": "mujoco",
+    "robot_name": "2xm_430_gripper",
+    "assembly_name": "toddlerbot",
+    "configuration": "Configuration=2xm_430_gripper",
+    "include_configuration_suffix": false,
+    "draw_frames": true,
+    "merge_stls": true,
+    "simplify_stls": true,
+    "maxSTLSize": 1,
+    "joint_properties": {
+        "neck_pitch_front": {
+            "actuated": false
+        },
+        "neck_pitch_back": {
+            "actuated": false
+        },
+        "neck_pitch": {
+            "actuated": false
+        },
+        "waist_roll": {
+            "actuated": false
+        },
+        "waist_yaw": {
+            "actuated": false
+        }
+    },
+    "equalities": {
+        "closing_neck_pitch*": {
+            "solref": "0.004 1",
+            "solimp": "0.9999 0.9999 0.001 0.5 2"
+        }
+    }
+}

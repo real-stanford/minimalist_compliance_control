@@ -1,0 +1,54 @@
+<mujoco model="leap hand rotation object scene">
+  <!-- <include file="left_hand_fixed.xml"/> -->
+  <option gravity="0 0 0"/>
+
+  <statistic center="-0.07 0.1 0.12" extent=".3"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="45" elevation="-50" fovy="45" offwidth="960" offheight="1080"/>
+  </visual>
+
+  <asset>
+    <texture
+      type="skybox"
+      builtin="gradient"
+      rgb1="0.3 0.5 0.7"
+      rgb2="0 0 0"
+      width="512"
+      height="3072"
+    />
+    <texture
+      type="2d"
+      name="manip_checker"
+      builtin="checker"
+      rgb1="0.75 0.9 0.75"
+      rgb2="0.2 0.45 0.2"
+      width="256"
+      height="256"
+    />
+    <material
+      name="manip_textured"
+      texture="manip_checker"
+      texrepeat="4 4"
+      rgba="0.2 0.8 0.3 1"
+    />
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1" dir="0 0 -1" directional="true"/>
+    <camera
+      name="fixed"
+      pos="-1.1153 -0.1372 0.3185"
+      xyaxes="0.0589 -0.9983 0.0000 0.1101 0.0065 0.9939"
+      mode="fixed"
+      fovy="20"
+      ipd="0.0"
+    />
+
+    <!-- Object selection: Change the include file to switch objects -->
+    <!-- Available objects: objects/sphere.xml, objects/box.xml, objects/cylinder_short.xml, objects/pen.xml -->
+    <include file="objects/cylinder_short.xml"/>
+  </worldbody>
+</mujoco>

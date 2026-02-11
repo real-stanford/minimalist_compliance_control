@@ -1,0 +1,12 @@
+robot:
+    hand_name: gripper_finger
+    foot_name: ankle_roll_link
+    com_x: -0.0207
+    com_z: 0.2815
+    hip_pitch_to_roll_z: 0.024
+    torso_to_hip_z: 0.06459
+    hip_to_knee_z: 0.1015
+    knee_to_ankle_z: 0.11
+    hip_to_ankle_pitch_z: 0.2115
+    hip_to_ankle_roll_z: 0.1875
+    foot_to_com_y: 0.037

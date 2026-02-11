@@ -1,0 +1,327 @@
+"""Compliance reference (site-based, no MotionReference dependency)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# from typing import Callable
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import mujoco
+import numpy as np
+
+# import numpy.typing as npt
+import gin
+
+from minimum_compliance.reference.ik_solvers import (
+    IKGains,
+    JacobianIK,
+    MinkIK,
+    JointToActuatorFn,
+)
+from minimum_compliance.utils.array_utils import ArrayType, R, inplace_update
+
+
+@dataclass(frozen=True)
+class CommandLayout:
+    width: int = 54
+    position: slice = slice(0, 3)
+    orientation: slice = slice(3, 6)
+    measured_force: slice = slice(6, 9)
+    measured_torque: slice = slice(9, 12)
+    kp_pos: slice = slice(12, 21)
+    kp_rot: slice = slice(21, 30)
+    kd_pos: slice = slice(30, 39)
+    kd_rot: slice = slice(39, 48)
+    force: slice = slice(48, 51)
+    torque: slice = slice(51, 54)
+
+
+COMMAND_LAYOUT = CommandLayout()
+
+
+@gin.configurable
+class ComplianceReference:
+    """Site-based compliance reference without robot-specific assumptions."""
+
+    def __init__(
+        self,
+        dt: float,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        site_names: Sequence[str],
+        actuator_indices: ArrayType,
+        joint_indices: ArrayType,
+        joint_to_actuator_fn: JointToActuatorFn,
+        default_motor_pos: ArrayType,
+        default_qpos: ArrayType,
+        fixed_model_xml_path: Optional[str] = None,
+        q_start_idx: int = 0,
+        qd_start_idx: int = 0,
+        ik_position_only: bool = False,
+        ik_gains: Optional[IKGains] = None,
+        mass: float = 1.0,
+        inertia_diag: ArrayType = (1.0, 1.0, 1.0),
+        mink_num_iter: int = 5,
+        mink_damping: float = 1e-2,
+    ) -> None:
+        self.dt = float(dt)
+        self.control_dt = float(dt)
+        self.model = model
+        self.mass = float(mass)
+        self.inertia_diag = np.asarray(inertia_diag, dtype=np.float32)
+        self.q_start_idx = int(q_start_idx)
+        self.qd_start_idx = int(qd_start_idx)
+
+        self.site_names = list(site_names)
+        if not self.site_names:
+            raise ValueError("site_names must be provided.")
+
+        self.actuator_indices = np.asarray(actuator_indices, dtype=np.int32)
+        self.joint_indices = np.asarray(joint_indices, dtype=np.int32)
+        self.joint_to_actuator_fn = joint_to_actuator_fn
+
+        self.default_motor_pos = np.asarray(default_motor_pos, dtype=np.float32)
+        self.default_qpos = np.asarray(default_qpos, dtype=np.float32)
+
+        self.site_ids = []
+        self.linvel_sensor_ids = []
+        self.angvel_sensor_ids = []
+        for site_name in self.site_names:
+            site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+            if site_id < 0:
+                raise ValueError(f"Site '{site_name}' not found in model.")
+            self.site_ids.append(site_id)
+            lin_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_SENSOR, f"{site_name}_linvel"
+            )
+            ang_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_SENSOR, f"{site_name}_angvel"
+            )
+            self.linvel_sensor_ids.append(int(lin_id))
+            self.angvel_sensor_ids.append(int(ang_id))
+
+        self.ik_position_only = ik_position_only
+        self.ik_gains = ik_gains or IKGains()
+        self.mink_num_iter = int(mink_num_iter)
+        self.mink_damping = float(mink_damping)
+
+        self.fixed_model = None
+        self.fixed_data = None
+        mink_model = model
+        if fixed_model_xml_path:
+            self.fixed_model = mujoco.MjModel.from_xml_path(fixed_model_xml_path)
+            self.fixed_data = mujoco.MjData(self.fixed_model)
+            mink_model = self.fixed_model
+
+        self.jac_ik = JacobianIK(
+            model=model,
+            site_ids=self.site_ids,
+            linvel_sensor_ids=self.linvel_sensor_ids,
+            angvel_sensor_ids=self.angvel_sensor_ids,
+            q_start_idx=self.q_start_idx,
+            qd_start_idx=self.qd_start_idx,
+            joint_indices=self.joint_indices,
+            joint_to_actuator_fn=self.joint_to_actuator_fn,
+            mass=self.mass,
+            inertia_diag=self.inertia_diag,
+            gains=self.ik_gains,
+        )
+        self.mink_ik = MinkIK(
+            model=mink_model,
+            site_names=self.site_names,
+            joint_indices=self.joint_indices,
+            joint_to_actuator_fn=self.joint_to_actuator_fn,
+            ik_position_only=self.ik_position_only,
+            source_q_start_idx=self.q_start_idx,
+        )
+
+        default_state = self.get_default_state()
+        self.site_home_pose = default_state["x_ref"].copy()
+
+    def get_default_state(self) -> Dict[str, ArrayType]:
+        num_sites = len(self.site_names)
+        zeros = np.zeros((num_sites, 6), dtype=np.float32)
+
+        data = mujoco.MjData(self.model)
+        data.qpos[:] = self.default_qpos.copy()
+        mujoco.mj_forward(self.model, data)
+
+        home_pose = np.zeros((num_sites, 6), dtype=np.float32)
+        for idx, site_id in enumerate(self.site_ids):
+            home_pose = inplace_update(
+                home_pose,
+                (idx, slice(0, 3)),
+                np.asarray(data.site(site_id).xpos, dtype=np.float32),
+            )
+            rotmat = np.asarray(data.site(site_id).xmat, dtype=np.float32).reshape(3, 3)
+            home_pose = inplace_update(
+                home_pose,
+                (idx, slice(3, 6)),
+                R.from_matrix(rotmat).as_rotvec().astype(np.float32),
+            )
+
+        return {
+            "name_to_idx": {name: idx for idx, name in enumerate(self.site_names)},
+            "x_ref": home_pose.copy(),
+            "x_ref_unprojected": home_pose.copy(),
+            "v_ref": zeros.copy(),
+            "a_ref": zeros.copy(),
+            "motor_pos": self.default_motor_pos.copy(),
+            "qpos": self.default_qpos.copy(),
+            "unreachable_mask": np.zeros(num_sites, dtype=bool),
+            "root_ref": np.zeros(3, dtype=np.float32),
+            "root_ref_world": np.zeros(3, dtype=np.float32),
+            "is_zero_force": True,
+        }
+
+    def integrate_commands(
+        self,
+        x_prev_unprojected: ArrayType,
+        v_prev: ArrayType,
+        command_matrix: ArrayType,
+    ) -> Tuple[ArrayType, ArrayType, ArrayType, ArrayType, ArrayType]:
+        positions = command_matrix[:, COMMAND_LAYOUT.position]
+        orientations = command_matrix[:, COMMAND_LAYOUT.orientation]
+        measured_force = command_matrix[:, COMMAND_LAYOUT.measured_force]
+        measured_torque = command_matrix[:, COMMAND_LAYOUT.measured_torque]
+        cmd_force = command_matrix[:, COMMAND_LAYOUT.force]
+        cmd_torque = command_matrix[:, COMMAND_LAYOUT.torque]
+        net_force = measured_force + cmd_force
+        net_torque = measured_torque + cmd_torque
+        kp_pos = command_matrix[:, COMMAND_LAYOUT.kp_pos].reshape(-1, 3, 3)
+        kp_rot = command_matrix[:, COMMAND_LAYOUT.kp_rot].reshape(-1, 3, 3)
+        kd_pos = command_matrix[:, COMMAND_LAYOUT.kd_pos].reshape(-1, 3, 3)
+        kd_rot = command_matrix[:, COMMAND_LAYOUT.kd_rot].reshape(-1, 3, 3)
+
+        x_next = x_prev_unprojected.copy()
+        x_next_unprojected = x_prev_unprojected.copy()
+        v_next = v_prev.copy()
+        a_next = np.zeros_like(v_prev)
+        is_unreachable = np.zeros(len(self.site_names), dtype=bool)
+
+        idx = np.arange(len(self.site_names), dtype=np.int32)
+        pos_prev = x_prev_unprojected[idx, :3]
+        vel_prev = v_prev[idx, :3]
+        pos_des = positions[idx]
+        pos_error = pos_des - pos_prev
+
+        kp_term = np.matmul(kp_pos[idx], pos_error[..., None]).reshape(-1, 3)
+        kd_term = np.matmul(kd_pos[idx], vel_prev[..., None]).reshape(-1, 3)
+        lin_acc = (kp_term - kd_term + net_force[idx]) / self.mass
+        vel_next = vel_prev + lin_acc * self.dt
+        pos_next = pos_prev + vel_next * self.dt
+
+        ori_prev = R.from_rotvec(x_prev_unprojected[idx, 3:6])
+        omega_prev = v_prev[idx, 3:6]
+        ori_des = R.from_rotvec(orientations[idx])
+        ori_error = (ori_des * ori_prev.inv()).as_rotvec()
+
+        kp_rot_term = np.matmul(kp_rot[idx], ori_error[..., None]).reshape(-1, 3)
+        kd_rot_term = np.matmul(kd_rot[idx], omega_prev[..., None]).reshape(-1, 3)
+        ang_acc = (kp_rot_term - kd_rot_term + net_torque[idx]) / self.inertia_diag
+        omega_next = omega_prev + ang_acc * self.dt
+        ori_next = (R.from_rotvec(omega_next * self.dt) * ori_prev).as_rotvec()
+
+        x_next = inplace_update(x_next, (idx, slice(0, 3)), pos_next)
+        x_next = inplace_update(x_next, (idx, slice(3, 6)), ori_next)
+        v_next = inplace_update(v_next, (idx, slice(0, 3)), vel_next)
+        v_next = inplace_update(v_next, (idx, slice(3, 6)), omega_next)
+        a_next = inplace_update(a_next, (idx, slice(0, 3)), lin_acc)
+        a_next = inplace_update(a_next, (idx, slice(3, 6)), ang_acc)
+        x_next_unprojected = inplace_update(
+            x_next_unprojected, (idx, slice(0, 3)), pos_next
+        )
+        x_next_unprojected = inplace_update(
+            x_next_unprojected, (idx, slice(3, 6)), ori_next
+        )
+        # print(a_next)
+        return x_next, v_next, a_next, x_next_unprojected, is_unreachable
+
+    def get_actuator_ref(
+        self,
+        data: mujoco.MjData,
+        x_ref: ArrayType,
+        v_ref: ArrayType,
+        a_ref: ArrayType,
+    ) -> ArrayType:
+        if self.mink_ik is not None:
+            return self.mink_ik.solve(
+                data,
+                x_ref,
+                v_ref,
+                self.dt,
+                num_iter=self.mink_num_iter,
+                damping=self.mink_damping,
+            )
+        return self.jac_ik.solve(data, x_ref, v_ref, a_ref)
+
+    def get_state_ref(
+        self,
+        time_curr: float | ArrayType,
+        command_matrix: ArrayType,
+        last_state: Dict[str, ArrayType],
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        site_names: Optional[List[str]] = None,
+        base_pos: Optional[ArrayType] = None,
+        base_quat: Optional[ArrayType] = None,
+    ) -> Dict[str, ArrayType]:
+        x_ref, v_ref, a_ref, x_ref_unprojected, unreachable_mask = (
+            self.integrate_commands(
+                last_state["x_ref_unprojected"],
+                last_state["v_ref"],
+                command_matrix,
+            )
+        )
+        base_pos_arr = (
+            np.asarray(base_pos, dtype=np.float32)
+            if base_pos is not None
+            else np.zeros(3, dtype=np.float32)
+        )
+        base_rot_arr = (
+            np.asarray(base_quat, dtype=np.float32)
+            if base_quat is not None
+            else np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        )
+        x_ref_for_ik = self.transform_x_ref_to_base_frame(
+            x_ref, base_pos_arr, base_rot_arr
+        )
+
+        actuator_pos = self.get_actuator_ref(data, x_ref_for_ik, v_ref, a_ref)
+        motor_pos = self.default_motor_pos.copy()
+        motor_pos = inplace_update(motor_pos, self.actuator_indices, actuator_pos)
+
+        return {
+            "name_to_idx": {name: idx for idx, name in enumerate(self.site_names)},
+            "x_ref": x_ref,
+            "v_ref": v_ref,
+            "a_ref": a_ref,
+            "x_ref_unprojected": x_ref_unprojected,
+            "motor_pos": motor_pos,
+            "qpos": last_state.get("qpos", self.default_qpos.copy()),
+            "root_ref": np.zeros(3, dtype=np.float32),
+            "root_ref_world": np.zeros(3, dtype=np.float32),
+            "unreachable_mask": unreachable_mask,
+            "is_zero_force": np.logical_and(
+                np.any(command_matrix[:, COMMAND_LAYOUT.measured_force] == 0),
+                np.any(command_matrix[:, COMMAND_LAYOUT.measured_torque] == 0),
+            ),
+        }
+
+    def transform_x_ref_to_base_frame(
+        self, x_ref: ArrayType, base_pos: ArrayType, base_quat_wxyz: ArrayType
+    ) -> ArrayType:
+        base_pos = np.asarray(base_pos, dtype=np.float32).reshape(3)
+        base_quat = np.asarray(base_quat_wxyz, dtype=np.float32).reshape(4)
+        base_quat = base_quat / (np.linalg.norm(base_quat) + 1e-9)
+        base_quat_xyzw = base_quat[[1, 2, 3, 0]]
+        base_rot = R.from_quat(base_quat_xyzw)
+
+        pos_world = np.asarray(x_ref[:, :3], dtype=np.float32)
+        rotvec_world = np.asarray(x_ref[:, 3:6], dtype=np.float32)
+        pos_local = base_rot.inv().apply(pos_world - base_pos)
+        rot_world = R.from_rotvec(rotvec_world).as_matrix()
+        rot_local = np.einsum("ij,njk->nik", base_rot.as_matrix().T, rot_world)
+        rotvec_local = R.from_matrix(rot_local).as_rotvec().astype(np.float32)
+        return np.concatenate([pos_local, rotvec_local], axis=-1).astype(np.float32)

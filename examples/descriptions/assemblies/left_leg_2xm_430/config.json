@@ -1,0 +1,14 @@
+{
+    "document_id": "3084b13ad43394bd46cc00cf",
+    "output_format": "mujoco",
+    "robot_name": "left_leg_2xm_430",
+    "assembly_name": "leg",
+    "configuration": "Configuration=left_2xm_430",
+    "include_configuration_suffix": false,
+    "draw_frames": true,
+    "merge_stls": true,
+    "simplify_stls": true,
+    "maxSTLSize": 1,
+    "joint_properties": {},
+    "equalities": {}
+}

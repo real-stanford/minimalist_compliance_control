@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minimum_compliance"
+version = "0.1.0"
+description = "Minimal compliance control and wrench estimation core."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+  {name = "Songbo Hu"},
+  {name = "Haochen Shi"}
+]
+dependencies = [
+  "numpy>=1.23",
+  "scipy>=1.9",
+  "mujoco>=2.3.7",
+  "jax>=0.4.13",
+  "jaxlib>=0.4.13",
+  "mink>=0.0.6",
+  "gin-config>=0.5.0",
+]
+
+[tool.setuptools]
+packages = [
+  "minimum_compliance",
+  "minimum_compliance.reference",
+  "minimum_compliance.utils",
+]
