@@ -14,17 +14,19 @@ This folder contains a standalone, minimal model-based policy demo.
 - `utils/zmq_control.py`: minimal ZMQ keyboard sender/receiver utilities.
 - `hybrid_servo/algorithm/ochs.py`: copied OCHS solver.
 - `hybrid_servo/demo/two_hand_rotate_ball/ochs_helpers.py`: copied OCHS input/jacobian helper functions.
+- `hybrid_servo/demo/multi_finger_rotate_anything/ochs_helpers.py`: copied OCHS helpers for LEAP rotate compliance.
+- `leaphand/`: standalone LEAP rotate compliance policy + OCHS helpers copied from toddlerbot.
 
 ## Run
 
 ```bash
-python examples/model_based_minimal/run_model_based_minimal.py
+python examples/model_based_minimal/toddlerbot/run_model_based_minimal.py
 ```
 
 On macOS MuJoCo viewer, use:
 
 ```bash
-mjpython examples/model_based_minimal/run_model_based_minimal.py
+mjpython examples/model_based_minimal/toddlerbot/run_model_based_minimal.py
 ```
 
 In another terminal, send keyboard commands:

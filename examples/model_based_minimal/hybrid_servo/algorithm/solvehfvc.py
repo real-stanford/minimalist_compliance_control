@@ -9,7 +9,12 @@ from dataclasses import dataclass
 
 import numpy as np
 import scipy.linalg
-from cvxopt import matrix, solvers
+
+try:
+    from cvxopt import matrix, solvers
+except Exception:
+    matrix = None  # type: ignore[assignment]
+    solvers = None  # type: ignore[assignment]
 
 np.set_printoptions(precision=4, suppress=True)
 
@@ -74,6 +79,10 @@ def solvehfvc(
     Returns:
         HFVC: Control action structure with n_av, n_af, R_a, w_av, eta_af
     """
+    if matrix is None or solvers is None:
+        raise ImportError(
+            "cvxopt is required for solvehfvc(). Install with: pip install cvxopt"
+        )
 
     # ==================== Problem Setup ====================
     kDimGeneralized = kDimActualized + kDimUnActualized
