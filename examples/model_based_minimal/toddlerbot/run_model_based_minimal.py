@@ -14,6 +14,7 @@ Implemented control phases:
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -23,6 +24,11 @@ import numpy as np
 import numpy.typing as npt
 import yaml
 from scipy.spatial.transform import Rotation as R
+
+SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
+EXAMPLE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+if EXAMPLE_DIR not in sys.path:
+    sys.path.insert(0, EXAMPLE_DIR)
 
 try:
     from utils.zmq_control import KeyboardControlReceiver
@@ -386,6 +392,17 @@ def _deep_update(d: dict, u: dict) -> dict:
     return d
 
 
+def _find_repo_root(start_dir: str) -> str:
+    curr = os.path.abspath(start_dir)
+    while True:
+        if os.path.isfile(os.path.join(curr, "pyproject.toml")):
+            return curr
+        parent = os.path.dirname(curr)
+        if parent == curr:
+            raise FileNotFoundError("Could not find repository root containing pyproject.toml.")
+        curr = parent
+
+
 def _build_contact_state(
     model: mujoco.MjModel,
     data: mujoco.MjData,
@@ -432,7 +449,7 @@ def _build_contact_state(
 
 
 def _load_robot_motor_config() -> dict:
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    repo_root = _find_repo_root(SCRIPT_DIR)
     default_path = os.path.join(repo_root, "examples", "descriptions", "default.yml")
     robot_path = os.path.join(
         repo_root,
@@ -1458,7 +1475,7 @@ def _update_mocap_targets_from_state_ref(
 def main() -> None:
     cfg = PolicyConfig()
 
-    config_path = os.path.join(os.path.dirname(__file__), "config.gin")
+    config_path = os.path.join(SCRIPT_DIR, "config.gin")
     gin.clear_config()
     gin.parse_config_file(config_path)
     gin.bind_parameter("WrenchSimConfig.view", True)
@@ -1501,7 +1518,7 @@ def main() -> None:
     default_state = controller.compliance_ref.get_default_state()
 
     kneel_action_arr, kneel_qpos, kneel_qpos_source_dim = _load_kneel_trajectory(
-        example_dir=os.path.dirname(__file__),
+        example_dir=EXAMPLE_DIR,
         cfg=cfg,
         default_motor_pos=np.asarray(default_state["motor_pos"], dtype=np.float64),
         default_qpos=np.asarray(default_state["qpos"], dtype=np.float64),
