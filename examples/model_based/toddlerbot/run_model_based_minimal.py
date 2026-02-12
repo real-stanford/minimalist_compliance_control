@@ -2,7 +2,7 @@
 """Model-based compliance policy (minimal, but phase-complete).
 
 This script keeps the runtime lightweight while directly using copied OCHS
-components from toddlerbot_internal under `examples/model_based_minimal/hybrid_servo`.
+components from toddlerbot_internal under `examples/model_based/hybrid_servo`.
 
 Implemented control phases:
 1) interpolate to default motor pose (prep)
@@ -329,7 +329,7 @@ def _update_goal_from_keyboard_and_time(
         )
         if mode_changed:
             print(
-                "[model_based_minimal] Mode switch -> "
+                "[model_based] Mode switch -> "
                 f"{runtime.active_hands_mode}, axis={runtime.goal_rotate_axis.tolist()}"
             )
             return True
@@ -567,14 +567,14 @@ def _load_kneel_trajectory(
             adapted = default.copy()
             adapted[: raw.shape[0]] = raw
             print(
-                "[model_based_minimal] Adapted kneel qpos "
+                "[model_based] Adapted kneel qpos "
                 f"{raw.shape[0]} -> {qpos_dim} using default tail from {source_path}"
             )
             return adapted
 
         adapted = raw[:qpos_dim].copy()
         print(
-            "[model_based_minimal] Truncated kneel qpos "
+            "[model_based] Truncated kneel qpos "
             f"{raw.shape[0]} -> {qpos_dim} from {source_path}"
         )
         return adapted
@@ -602,15 +602,15 @@ def _load_kneel_trajectory(
                 source_qpos_dim = int(np.asarray(qpos_last_raw).reshape(-1).shape[0])
                 qpos_last = _adapt_kneel_qpos(qpos_last_raw, path_abs)
 
-                print(f"[model_based_minimal] Loaded kneel trajectory: {path_abs}")
+                print(f"[model_based] Loaded kneel trajectory: {path_abs}")
                 return action_arr, qpos_last, source_qpos_dim
             except Exception as exc:
                 print(
-                    f"[model_based_minimal] Failed to load kneel trajectory {path_abs}: {exc}"
+                    f"[model_based] Failed to load kneel trajectory {path_abs}: {exc}"
                 )
 
     print(
-        "[model_based_minimal] Kneel trajectory unavailable, using single-step fallback."
+        "[model_based] Kneel trajectory unavailable, using single-step fallback."
     )
     fallback_action = np.asarray(default_motor_pos, dtype=np.float64).reshape(1, -1)
     fallback_qpos = np.asarray(default_qpos, dtype=np.float64).copy()
@@ -1169,7 +1169,7 @@ def _maybe_print_ochs_world_velocity(
     ).reshape(3)
 
     print(
-        "[model_based_minimal][OCHS->world] "
+        "[model_based][OCHS->world] "
         f"t={float(t):.3f} "
         f"center_linvel={center_linvel.tolist()} "
         f"center_angvel={center_angvel.tolist()} "
@@ -1421,12 +1421,12 @@ def _resolve_mocap_target_ids(
 
     if left_mocap_id is None or right_mocap_id is None:
         print(
-            "[model_based_minimal] Warning: mocap targets not found "
+            "[model_based] Warning: mocap targets not found "
             "(expected bodies: left_hand_target/right_hand_target)."
         )
     else:
         print(
-            "[model_based_minimal] Mocap targets ready "
+            "[model_based] Mocap targets ready "
             f"(left={left_mocap_id}, right={right_mocap_id})."
         )
 
@@ -1576,12 +1576,12 @@ def main() -> None:
     kneel_hold_motor_pos = runtime.kneel_action_arr[-1].copy()
     if hold_indices.size > 0:
         print(
-            "[model_based_minimal] Locking neck+leg motors to kneel posture "
+            "[model_based] Locking neck+leg motors to kneel posture "
             f"for indices={hold_indices.tolist()}"
         )
     else:
         print(
-            "[model_based_minimal] Warning: neck/leg motor groups not found; no posture lock."
+            "[model_based] Warning: neck/leg motor groups not found; no posture lock."
         )
 
     control_dt = float(controller.ref_config.dt)
@@ -1596,15 +1596,15 @@ def main() -> None:
     )
 
     print(
-        "[model_based_minimal] Phase = prep "
+        "[model_based] Phase = prep "
         f"(initial mode={runtime.active_hands_mode}, axis={runtime.goal_rotate_axis.tolist()})"
     )
     print(
-        "[model_based_minimal] Prep start "
+        "[model_based] Prep start "
         f"(max|q_init-q_default|={prep_delta_max:.4f}, mean={prep_delta_mean:.4f})"
     )
     print(
-        "[model_based_minimal] Timing "
+        "[model_based] Timing "
         f"(sim_dt={sim_dt:.4f}, control_dt={control_dt:.4f}, n_frames={n_frames})"
     )
 
@@ -1623,7 +1623,7 @@ def main() -> None:
                         runtime, data, left_site_id, right_site_id
                     )
                     target_motor_pos = runtime.kneel_action_arr[0].copy()
-                    print("[model_based_minimal] Phase transition: prep -> kneel")
+                    print("[model_based] Phase transition: prep -> kneel")
 
             elif runtime.phase == "kneel":
                 _ensure_default_hand_rotvec(runtime, data, left_site_id, right_site_id)
@@ -1659,7 +1659,7 @@ def main() -> None:
                             data.qpos[:] = runtime.kneel_qpos
                         elif src_dim > 0:
                             print(
-                                "[model_based_minimal] Kneel qpos sync "
+                                "[model_based] Kneel qpos sync "
                                 f"(partial {src_dim}/{model.nq}; preserving tail state)."
                             )
                             data.qpos[:src_dim] = runtime.kneel_qpos[:src_dim]
@@ -1681,7 +1681,7 @@ def main() -> None:
                         if isinstance(controller._last_state, dict)
                         else None
                     )
-                    print("[model_based_minimal] Phase transition: kneel -> approach")
+                    print("[model_based] Phase transition: kneel -> approach")
 
             elif runtime.phase == "approach":
                 reached = _run_approach_phase(runtime, cfg, state, control_dt)
@@ -1717,7 +1717,7 @@ def main() -> None:
                             state["ball_pos"], dtype=np.float64
                         ).copy()
                         print(
-                            "[model_based_minimal] Phase transition: approach -> model_based"
+                            "[model_based] Phase transition: approach -> model_based"
                         )
 
             elif runtime.phase == "model_based":
@@ -1737,7 +1737,7 @@ def main() -> None:
                     _reset_approach_interp(runtime)
                     runtime.wrench_command[:] = 0.0
                     print(
-                        "[model_based_minimal] Phase transition: mode switch -> approach"
+                        "[model_based] Phase transition: mode switch -> approach"
                     )
                 else:
                     total_angular_velocity_vec = (

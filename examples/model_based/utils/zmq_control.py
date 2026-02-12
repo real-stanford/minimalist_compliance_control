@@ -1,4 +1,4 @@
-"""Minimal ZMQ keyboard command utilities for model_based_minimal.
+"""Minimal ZMQ keyboard command utilities for model_based.
 
 Commands:
 - c: reverse current goal direction
@@ -37,7 +37,7 @@ class KeyboardControlReceiver:
             import zmq  # type: ignore
         except Exception as exc:
             print(
-                "[model_based_minimal] Keyboard control disabled: "
+                "[model_based] Keyboard control disabled: "
                 f"pyzmq unavailable ({exc})."
             )
             return
@@ -49,7 +49,7 @@ class KeyboardControlReceiver:
         self._sock.bind(f"tcp://*:{self.port}")
         self.enabled = True
         print(
-            "[model_based_minimal] Keyboard receiver listening on "
+            "[model_based] Keyboard receiver listening on "
             f"tcp://*:{self.port} (c/l/r/b)."
         )
 

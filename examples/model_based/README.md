@@ -20,19 +20,19 @@ This folder contains a standalone, minimal model-based policy demo.
 ## Run
 
 ```bash
-python examples/model_based_minimal/toddlerbot/run_model_based_minimal.py
+python examples/model_based/toddlerbot/run_model_based_minimal.py
 ```
 
 On macOS MuJoCo viewer, use:
 
 ```bash
-mjpython examples/model_based_minimal/toddlerbot/run_model_based_minimal.py
+mjpython examples/model_based/toddlerbot/run_model_based_minimal.py
 ```
 
 In another terminal, send keyboard commands:
 
 ```bash
-python examples/model_based_minimal/utils/keyboard_control_ball.py --host 127.0.0.1 --port 5592
+python examples/model_based/utils/keyboard_control_ball.py --host 127.0.0.1 --port 5592
 ```
 
 Commands:

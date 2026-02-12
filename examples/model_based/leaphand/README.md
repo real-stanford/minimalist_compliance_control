@@ -14,7 +14,7 @@ refactored to avoid `toddlerbot` runtime dependencies.
 
 ## External dependencies
 
-This module depends only on packages already used by `examples/model_based_minimal`:
+This module depends only on packages already used by `examples/model_based`:
 
 - `numpy`
 - `scipy`
@@ -26,13 +26,13 @@ This module depends only on packages already used by `examples/model_based_minim
 ## Run (Self-Contained)
 
 ```bash
-python examples/model_based_minimal/leaphand/leap_rotate_compliance.py
+python examples/model_based/leaphand/leap_rotate_compliance.py
 ```
 
 On macOS MuJoCo viewer:
 
 ```bash
-mjpython examples/model_based_minimal/leaphand/leap_rotate_compliance.py
+mjpython examples/model_based/leaphand/leap_rotate_compliance.py
 ```
 
 Useful flags:

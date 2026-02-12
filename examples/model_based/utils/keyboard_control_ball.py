@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keyboard control sender for model_based_minimal."""
+"""Keyboard control sender for model_based."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def main(host: str, port: int) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Keyboard control sender for model_based_minimal"
+        description="Keyboard control sender for model_based"
     )
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5592)
