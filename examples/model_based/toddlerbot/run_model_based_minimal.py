@@ -549,8 +549,10 @@ def _load_kneel_trajectory(
     candidates = [
         os.path.join(example_dir, cfg.kneel_motion_file),
         os.path.join(example_dir, "..", "..", "motion", cfg.kneel_motion_file),
-        "/Users/hsb/code_space/toddlerbot_internal/motion/kneel_2xm.lz4",
     ]
+    env_kneel_path = os.environ.get("MCC_KNEEL_TRAJ")
+    if env_kneel_path:
+        candidates.append(env_kneel_path)
 
     def _adapt_kneel_qpos(raw_qpos_last: Array, source_path: str) -> Array:
         raw = np.asarray(raw_qpos_last, dtype=np.float64).reshape(-1)
@@ -1478,7 +1480,6 @@ def main() -> None:
     config_path = os.path.join(SCRIPT_DIR, "config.gin")
     gin.clear_config()
     gin.parse_config_file(config_path)
-    gin.bind_parameter("WrenchSimConfig.view", True)
 
     controller = ComplianceController(
         config=ControllerConfig(),

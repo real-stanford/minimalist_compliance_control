@@ -1,10 +1,10 @@
 # Minimal compliance config for toddlerbot floating-base model-based policy
 
-# Wrench simulation (kept for completeness)
-WrenchSimConfig.xml_path = "examples/descriptions/toddlerbot_2xm/toddlerbot_2xm_model_based.xml"
+# Wrench simulation
+WrenchSimConfig.xml_path = "examples/descriptions/toddlerbot_2xm/scene.xml"
 WrenchSimConfig.site_names = ("left_hand_center", "right_hand_center")
 WrenchSimConfig.fixed_base = False
-WrenchSimConfig.view = False
+WrenchSimConfig.view = True
 WrenchSimConfig.render = False
 
 # Controller config
@@ -44,3 +44,12 @@ ComplianceRefConfig.default_motor_pos = (0.0, 0.0, 0.0, 0.0, -0.0913, 0.0, 0.0, 
 ComplianceRefConfig.default_qpos = (0.0222, 0.0, 0.3092, 1.0, 0.0, 0.0, 0.0, 0.0, -0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.0913, 0.0, -0.0, 0.0, -0.3808, -0.2895, 0.0, 0.0913, 0.0, -0.0, 0.0, 0.3808, 0.2895, 0.0, 0.1745, 0.0873, 1.5708, -1.5708, -0.5236, -1.5708, 1.5708, 1.2217, -1.2217, 0.0, -0.1745, 0.0873, -1.5708, 1.5708, -0.5236, 1.5708, -1.5708, -1.2217, 1.2217, 0.0)
 ComplianceRefConfig.joint_to_actuator_scale = (1, 1, -1, 1, -1, -1, 1, 1, 1, -1, 1, -1, -1, 1)
 ComplianceRefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+# Runner config
+RunnerConfig.kp_pos = 150.0
+RunnerConfig.kp_rot = 5.0
+RunnerConfig.wrench_debug_site = "right_hand_center"
+
+# Motor config paths
+MotorConfigPaths.default_config_path = "examples/descriptions/default.yml"
+MotorConfigPaths.robot_config_path = "examples/descriptions/toddlerbot_2xm/robot.yml"

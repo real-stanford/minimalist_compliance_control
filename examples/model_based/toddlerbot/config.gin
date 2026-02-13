@@ -4,7 +4,7 @@
 WrenchSimConfig.xml_path = "examples/descriptions/toddlerbot_2xm/scene_ball.xml"
 WrenchSimConfig.site_names = ("left_hand_center", "right_hand_center")
 WrenchSimConfig.fixed_base = False
-WrenchSimConfig.view = False
+WrenchSimConfig.view = True
 WrenchSimConfig.render = False
 
 # Controller config

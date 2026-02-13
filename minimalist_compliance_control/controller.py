@@ -59,14 +59,14 @@ class ControllerConfig:
 @gin.configurable
 @dataclass
 class ComplianceRefConfig:
-    dt: float = 0.02
-    ik_position_only: bool = False
-    mass: float = 1.0
-    inertia_diag: Sequence[float] = (1.0, 1.0, 1.0)
-    mink_num_iter: int = 5
-    mink_damping: float = 1e-2
-    q_start_idx: int = 0
-    qd_start_idx: int = 0
+    dt: Optional[float] = None
+    ik_position_only: Optional[bool] = None
+    mass: Optional[float] = None
+    inertia_diag: Optional[Sequence[float]] = None
+    mink_num_iter: Optional[int] = None
+    mink_damping: Optional[float] = None
+    q_start_idx: Optional[int] = None
+    qd_start_idx: Optional[int] = None
     actuator_indices: Optional[Sequence[int]] = None
     joint_indices: Optional[Sequence[int]] = None
     default_motor_pos: Optional[Sequence[float]] = None
@@ -101,18 +101,18 @@ class ComplianceController:
         if config is None:
             raise ValueError("Either gin_path or config must be provided.")
 
-        if (
-            config.xml_path is None
-            or config.site_names is None
-            or config.fixed_base is None
-        ):
-            sim_cfg = WrenchSimConfig()
-            if config.xml_path is None:
-                config.xml_path = sim_cfg.xml_path
-            if config.site_names is None:
-                config.site_names = sim_cfg.site_names
-            if config.fixed_base is None:
-                config.fixed_base = sim_cfg.fixed_base
+        missing_cfg = []
+        if config.xml_path is None:
+            missing_cfg.append("ControllerConfig.xml_path")
+        if config.site_names is None:
+            missing_cfg.append("ControllerConfig.site_names")
+        if config.fixed_base is None:
+            missing_cfg.append("ControllerConfig.fixed_base")
+        if missing_cfg:
+            raise ValueError(
+                "Missing required controller configuration: "
+                + ", ".join(missing_cfg)
+            )
 
         self.config = config
         self.estimate_config = estimate_config or WrenchEstimateConfig()
@@ -120,9 +120,9 @@ class ComplianceController:
             raise ValueError("base_body_name must be empty when fixed_base is True.")
         self.wrench_sim = WrenchSim(
             WrenchSimConfig(
-                xml_path=config.xml_path,
-                site_names=config.site_names,
-                fixed_base=config.fixed_base,
+                xml_path=str(config.xml_path),
+                site_names=tuple(config.site_names),
+                fixed_base=bool(config.fixed_base),
             )
         )
         self.ref_config = ref_config or ComplianceRefConfig()
@@ -137,6 +137,29 @@ class ComplianceController:
 
     def _build_compliance_ref(self) -> None:
         cfg = self.ref_config
+        missing_ref_cfg = []
+        if cfg.dt is None:
+            missing_ref_cfg.append("ComplianceRefConfig.dt")
+        if cfg.ik_position_only is None:
+            missing_ref_cfg.append("ComplianceRefConfig.ik_position_only")
+        if cfg.mass is None:
+            missing_ref_cfg.append("ComplianceRefConfig.mass")
+        if cfg.inertia_diag is None:
+            missing_ref_cfg.append("ComplianceRefConfig.inertia_diag")
+        if cfg.mink_num_iter is None:
+            missing_ref_cfg.append("ComplianceRefConfig.mink_num_iter")
+        if cfg.mink_damping is None:
+            missing_ref_cfg.append("ComplianceRefConfig.mink_damping")
+        if cfg.q_start_idx is None:
+            missing_ref_cfg.append("ComplianceRefConfig.q_start_idx")
+        if cfg.qd_start_idx is None:
+            missing_ref_cfg.append("ComplianceRefConfig.qd_start_idx")
+        if missing_ref_cfg:
+            raise ValueError(
+                "Missing required compliance reference configuration: "
+                + ", ".join(missing_ref_cfg)
+            )
+
         model = self.wrench_sim.model
         data = self.wrench_sim.data
         site_names = self.config.site_names
@@ -201,7 +224,7 @@ class ComplianceController:
         )
 
         self.compliance_ref = ComplianceReference(
-            dt=cfg.dt,
+            dt=float(cfg.dt),
             model=model,
             data=data,
             site_names=site_names,
@@ -211,13 +234,13 @@ class ComplianceController:
             default_motor_pos=default_motor_pos,
             default_qpos=default_qpos,
             fixed_model_xml_path=cfg.fixed_model_xml_path,
-            q_start_idx=cfg.q_start_idx,
-            qd_start_idx=cfg.qd_start_idx,
-            ik_position_only=cfg.ik_position_only,
-            mass=cfg.mass,
-            inertia_diag=cfg.inertia_diag,
-            mink_num_iter=cfg.mink_num_iter,
-            mink_damping=cfg.mink_damping,
+            q_start_idx=int(cfg.q_start_idx),
+            qd_start_idx=int(cfg.qd_start_idx),
+            ik_position_only=bool(cfg.ik_position_only),
+            mass=float(cfg.mass),
+            inertia_diag=np.asarray(cfg.inertia_diag, dtype=np.float32),
+            mink_num_iter=int(cfg.mink_num_iter),
+            mink_damping=float(cfg.mink_damping),
         )
         self._last_state = self.compliance_ref.get_default_state()
         self._default_motor_pos = default_motor_pos

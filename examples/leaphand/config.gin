@@ -4,7 +4,7 @@
 WrenchSimConfig.xml_path = "examples/descriptions/leap_hand_rotation/scene_fixed.xml"
 WrenchSimConfig.site_names = ("if_tip", "mf_tip", "rf_tip", "th_tip")
 WrenchSimConfig.fixed_base = True
-WrenchSimConfig.view = False
+WrenchSimConfig.view = True
 WrenchSimConfig.render = False
 
 # Controller config
@@ -48,3 +48,19 @@ ComplianceRefConfig.mink_damping = 1e-2
 ComplianceRefConfig.actuator_indices = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
 ComplianceRefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 ComplianceRefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+# Runner config
+RunnerConfig.kp_pos = 150.0
+RunnerConfig.kp_rot = 5.0
+RunnerConfig.wrench_debug_site = "if_tip"
+RunnerConfig.initial_pose = (
+    (0.052, -0.1, 0.247, -3.14, 0.0, 0.0),
+    (0.052, -0.055, 0.247, -3.14, 0.0, 0.0),
+    (0.052, -0.01, 0.247, -3.14, 0.0, 0.0),
+    (-0.228, -0.094, 0.149, -0.07, 2.42, 0.02),
+)
+
+# Motor config paths
+MotorConfigPaths.default_config_path = "examples/descriptions/default.yml"
+MotorConfigPaths.robot_config_path = "examples/descriptions/leap_hand_rotation/robot.yml"
+MotorConfigPaths.motors_config_path = "examples/descriptions/leap_hand_rotation/motors.yml"

@@ -1,5 +1,7 @@
 import os
 import time
+from dataclasses import dataclass
+from typing import Optional, Sequence
 
 import gin
 import mujoco
@@ -16,13 +18,13 @@ from minimalist_compliance_control.reference.compliance_ref import COMMAND_LAYOU
 from minimalist_compliance_control.wrench_estimation import WrenchEstimateConfig
 
 
-def _sensor_data(model, data, name):
-    sensor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, name)
-    if sensor_id < 0:
-        return None
-    start = int(model.sensor_adr[sensor_id])
-    end = start + int(model.sensor_dim[sensor_id])
-    return np.asarray(data.sensordata[start:end], dtype=np.float32).copy()
+@gin.configurable
+@dataclass
+class RunnerConfig:
+    kp_pos: Optional[float] = None
+    kp_rot: Optional[float] = None
+    wrench_debug_site: Optional[str] = None
+    initial_pose: Sequence[Sequence[float]] = ()
 
 
 def _deep_update(d, u):
@@ -34,30 +36,33 @@ def _deep_update(d, u):
     return d
 
 
-def _load_motor_params(model):
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    default_path = os.path.join(repo_root, "examples", "descriptions", "default.yml")
-    robot_path = os.path.join(
-        repo_root,
-        "examples",
-        "descriptions",
-        "leap_hand_rotation",
-        "robot.yml",
-    )
-    motors_path = os.path.join(
-        repo_root,
-        "examples",
-        "descriptions",
-        "leap_hand_rotation",
-        "motors.yml",
-    )
-    with open(default_path, "r") as f:
+@gin.configurable
+@dataclass
+class MotorConfigPaths:
+    default_config_path: Optional[str] = None
+    robot_config_path: Optional[str] = None
+    motors_config_path: Optional[str] = None
+
+
+def _load_motor_params(
+    model: mujoco.MjModel,
+    motor_paths: MotorConfigPaths,
+):
+    if (
+        not motor_paths.default_config_path
+        or not motor_paths.robot_config_path
+        or not motor_paths.motors_config_path
+    ):
+        raise ValueError(
+            "MotorConfigPaths.default_config_path, robot_config_path, and motors_config_path must be configured."
+        )
+    with open(motor_paths.default_config_path, "r") as f:
         config = yaml.safe_load(f)
-    with open(robot_path, "r") as f:
+    with open(motor_paths.robot_config_path, "r") as f:
         robot_cfg = yaml.safe_load(f)
     if robot_cfg is not None:
         _deep_update(config, robot_cfg)
-    with open(motors_path, "r") as f:
+    with open(motor_paths.motors_config_path, "r") as f:
         motor_cfg = yaml.safe_load(f)
     if motor_cfg is not None:
         _deep_update(config, motor_cfg)
@@ -115,11 +120,10 @@ def main() -> None:
     config_path = os.path.join(os.path.dirname(__file__), "config.gin")
     gin.clear_config()
     gin.parse_config_file(config_path)
-    gin.bind_parameter("WrenchSimConfig.view", True)
-    gin.bind_parameter(
-        "WrenchSimConfig.xml_path",
-        "examples/descriptions/leap_hand_rotation/scene_fixed.xml",
-    )
+    runner_cfg = RunnerConfig()
+    motor_cfg_paths = MotorConfigPaths()
+    if runner_cfg.kp_pos is None or runner_cfg.kp_rot is None:
+        raise ValueError("RunnerConfig.kp_pos and RunnerConfig.kp_rot must be configured.")
     controller = ComplianceController(
         config=ControllerConfig(),
         estimate_config=WrenchEstimateConfig(),
@@ -138,24 +142,13 @@ def main() -> None:
     num_sites = len(controller.config.site_names)
     command_matrix = np.zeros((num_sites, COMMAND_LAYOUT.width), dtype=np.float32)
     default_state = controller.compliance_ref.get_default_state()
-    init_pos = np.array(
-        [
-            [0.052, -0.1, 0.247],
-            [0.052, -0.055, 0.247],
-            [0.052, -0.01, 0.247],
-            [-0.228, -0.094, 0.149],
-        ],
-        dtype=np.float32,
-    )
-    init_ori = np.array(
-        [
-            [-3.14, 0.0, 0.0],
-            [-3.14, 0.0, 0.0],
-            [-3.14, 0.0, 0.0],
-            [-0.07, 2.42, 0.02],
-        ],
-        dtype=np.float32,
-    )
+    init_pose_arr = np.asarray(runner_cfg.initial_pose, dtype=np.float32)
+    if init_pose_arr.shape != (num_sites, 6):
+        raise ValueError(
+            f"RunnerConfig.initial_pose must be shape ({num_sites}, 6), got {init_pose_arr.shape}."
+        )
+    init_pos = init_pose_arr[:, :3]
+    init_ori = init_pose_arr[:, 3:6]
     init_pose = np.concatenate([init_pos, init_ori], axis=1)
     command_matrix[:, COMMAND_LAYOUT.position] = init_pos
     command_matrix[:, COMMAND_LAYOUT.orientation] = init_ori
@@ -164,8 +157,8 @@ def main() -> None:
     default_state["v_ref"] = np.zeros_like(default_state["v_ref"])
     default_state["a_ref"] = np.zeros_like(default_state["a_ref"])
     controller._last_state = default_state
-    kp_pos = 150.0
-    kp_rot = 5.0
+    kp_pos = float(runner_cfg.kp_pos)
+    kp_rot = float(runner_cfg.kp_rot)
     mass = float(controller.ref_config.mass)
     inertia_diag = np.asarray(controller.ref_config.inertia_diag, dtype=np.float32)
     kd_pos = 2.0 * np.sqrt(mass * kp_pos)
@@ -202,9 +195,16 @@ def main() -> None:
         tau_brake_max,
         kd_min,
         passive_active_ratio,
-    ) = _load_motor_params(model)
+    ) = _load_motor_params(model, motor_cfg_paths)
 
     t0 = time.time()
+    debug_site: Optional[str] = (
+        str(runner_cfg.wrench_debug_site).strip()
+        if runner_cfg.wrench_debug_site is not None
+        else None
+    )
+    if debug_site == "":
+        debug_site = None
     while True:
         t = time.time() - t0
         if t >= next_control_time:
@@ -219,18 +219,17 @@ def main() -> None:
             out = controller.step(inputs, use_estimated_wrench=True)
             if "state_ref" in out:
                 target_motor_pos = np.asarray(out["state_ref"]["motor_pos"])
-            if "wrenches" in out:
-                name = "if_tip"
-                est = out["wrenches"].get(name)
+            if "wrenches" in out and debug_site is not None:
+                est = out["wrenches"].get(debug_site)
                 if est is not None:
-                    site_id = controller.wrench_sim.site_ids[name]
+                    site_id = controller.wrench_sim.site_ids[debug_site]
                     body_id = int(model.site_bodyid[site_id])
                     applied_force = np.asarray(
                         data.xfrc_applied[body_id][:3], dtype=np.float32
                     )
                     tf = np.round(applied_force, 3)
                     ef = np.round(est[:3].astype(np.float32), 3)
-                    print(f"{name} applied_force {tf} est_force {ef}")
+                    print(f"{debug_site} applied_force {tf} est_force {ef}")
             next_control_time += control_dt
 
         q = data.qpos[qpos_adr]
