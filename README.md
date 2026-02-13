@@ -1,19 +1,33 @@
 # minimalist_compliance_control
 
-Minimal compliance control + wrench estimation core with a clean interface.
+A lightweight package for MuJoCo-based compliance control and wrench estimation.
 
-## Package layout
-- `minimalist_compliance_control/wrench_sim.py`: standalone MuJoCo backend for Jacobians/bias torques
-- `minimalist_compliance_control/wrench_estimation.py`: Jacobian-based wrench estimation utilities
-- `minimalist_compliance_control/controller.py`: unified pipeline controller
-- `minimalist_compliance_control/reference/`: compliance reference utilities
+## Overview
 
-## Install (editable)
+`minimalist_compliance_control` provides a minimal, reusable control stack with:
+
+- wrench simulation and Jacobian utilities,
+- online wrench estimation,
+- compliance reference integration,
+- a unified controller interface.
+
+## Installation
 
 ```bash
 pip install -e .
 ```
 
-## Usage
+## Core Modules
 
-Import the controller, sim, and reference modules as needed.
+- `minimalist_compliance_control/wrench_sim.py`
+- `minimalist_compliance_control/wrench_estimation.py`
+- `minimalist_compliance_control/controller.py`
+- `minimalist_compliance_control/reference/`
+
+## Examples
+
+Example usage is documented under:
+
+- `examples/model_based/`
+- `examples/diffusion_policy/`
+- `examples/vlm/`

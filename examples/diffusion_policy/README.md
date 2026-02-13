@@ -1,33 +1,19 @@
-# Compliance DP (Self-Contained)
+# Compliance DP Example
 
-This folder ports toddlerbot_internal `compliance_dp` inference core into a standalone example.
+## Purpose
 
-## Included
+This example runs a standalone diffusion-based compliance policy and outputs
+`pose_command` and `command_matrix` compatible with the package compliance layout.
 
-- `compliance_dp.py`
-  - `StandaloneComplianceDP`: async diffusion inference + action timing + pose-command conversion
-  - outputs `pose_command` and `command_matrix` compatible with
-    `minimalist_compliance_control.reference.compliance_ref.COMMAND_LAYOUT`
-- `dp_model.py`
-  - local `DPModel` adapted from `toddlerbot/manipulation/inference_class.py`
-- `models/diffusion_model.py`
-  - local `ConditionalUnet1D`
-- `utils/`
-  - normalization, model helpers, trajectory interpolation
-- `run_compliance_dp.py`
-  - replay runner for offline data (`.npz`) or dummy input
+## Usage
 
-## Dependencies
-
-In addition to repo defaults, compliance DP inference requires:
+Install required dependencies:
 
 ```bash
 pip install torch torchvision diffusers opencv-python joblib
 ```
 
-## Run
-
-Replay mode (recommended):
+Replay mode:
 
 ```bash
 python -m examples.diffusion_policy.run_compliance_dp \
@@ -45,17 +31,9 @@ python -m examples.diffusion_policy.run_compliance_dp \
   --num-sites 2
 ```
 
-## Replay file keys
+Replay file keys:
 
-Required keys:
-- image (`image`/`images`/`rgb`/`camera`)
-- x_obs (`x_obs`/`pose`/`ee_pose`)
-
-Optional keys:
-- x_wrench (`x_wrench`/`wrench`/`wrenches`)
-- motor_pos (`motor_pos`/`obs_motor_pos`/`qpos`)
-
-## Notes
-
-- This migration targets `compliance_dp` behavior (not the old `dp_policy` motor-only path).
-- The module is self-contained and does not import `toddlerbot.*` runtime classes.
+- required image key: `image` / `images` / `rgb` / `camera`
+- required pose key: `x_obs` / `pose` / `ee_pose`
+- optional wrench key: `x_wrench` / `wrench` / `wrenches`
+- optional motor key: `motor_pos` / `obs_motor_pos` / `qpos`

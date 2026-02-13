@@ -1,9 +1,16 @@
-# Depth Calibration Files
+# VLM Depth Params
 
-Place the stereo calibration files here for VLM affordance prediction:
+## Purpose
+
+This folder stores stereo calibration files used by the VLM affordance pipeline.
+
+## Usage
+
+Place these files here before running the VLM example:
 
 - `calibration.pkl`
 - `rectification.npz`
 
-`examples/vlm/affordance/affordance_predictor.py` loads these by default.
-You can also pass custom paths via `AffordancePredictor(depth_config=...)`.
+Default loader location:
+
+- `examples/vlm/affordance/affordance_predictor.py`

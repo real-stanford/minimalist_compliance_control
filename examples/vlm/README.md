@@ -1,43 +1,31 @@
-# Compliance VLM (Self-Contained)
+# Compliance VLM Example
 
-This folder ports `toddlerbot_internal` `compliance_vlm` policy into a standalone module.
+## Purpose
 
-## Included
+This example runs a standalone VLM-guided compliance policy with mode switching
+(`waiting`, `wiping`, `drawing`) and outputs package-compatible `command_matrix`.
 
-- `compliance_vlm.py`
-  - `StandaloneComplianceVLM`: mode switching (`waiting/wiping/drawing`), async affordance prediction, trajectory execution, fixed-trajectory replay, command matrix output.
-- `run_compliance_vlm.py`
-  - replay/dummy runner for offline testing.
-- `affordance/`
-  - local copies of affordance predictor + trajectory planner modules.
-- `depth/`
-  - local depth utility + rectifier modules.
-- `utils/`
-  - local camera/zmq/math helpers.
+## Usage
 
-## Dependencies
+Install dependencies:
 
 ```bash
 pip install numpy scipy opencv-python joblib pyzmq requests open3d pycocotools
 ```
 
-For real affordance prediction, also set API key and ensure foundation/SAM services are reachable:
+Set API key for predictor backend:
 
 ```bash
-export GOOGLE_API_KEY=...   # for gemini provider
-# or export OPENAI_API_KEY=... if using openai provider
+export GOOGLE_API_KEY=...
+# or export OPENAI_API_KEY=...
 ```
 
-## Depth Calibration Files
-
-Put these files under `examples/vlm/depth/params/`:
+Place depth calibration files in `examples/vlm/depth/params/`:
 
 - `calibration.pkl`
 - `rectification.npz`
 
-## Run
-
-Replay mode (recommended):
+Replay mode:
 
 ```bash
 python -m examples.vlm.run_compliance_vlm \
@@ -56,21 +44,11 @@ python -m examples.vlm.run_compliance_vlm \
   --mode waiting
 ```
 
-## Replay Keys
+Replay file keys:
 
-Required keys:
-
-- left image: `left_image` / `image` / `images` / `rgb` / `camera`
-- `x_obs`: `x_obs` / `pose` / `ee_pose`
-
-Optional keys:
-
-- right image: `right_image` / `image_right` / `right`
-- `x_wrench`: `x_wrench` / `wrench` / `wrenches`
-- head position: `head_pos` / `head_position` / `head_position_world`
-- head quaternion (wxyz): `head_quat` / `head_quaternion` / `head_quaternion_world_wxyz`
-
-## Notes
-
-- Output command matrix is aligned with `minimalist_compliance_control.reference.compliance_ref.COMMAND_LAYOUT`.
-- This migration is self-contained and does not import `toddlerbot.*` runtime modules.
+- required left image: `left_image` / `image` / `images` / `rgb` / `camera`
+- required pose: `x_obs` / `pose` / `ee_pose`
+- optional right image: `right_image` / `image_right` / `right`
+- optional wrench: `x_wrench` / `wrench` / `wrenches`
+- optional head position: `head_pos` / `head_position` / `head_position_world`
+- optional head quaternion (wxyz): `head_quat` / `head_quaternion` / `head_quaternion_world_wxyz`
