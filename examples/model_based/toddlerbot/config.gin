@@ -8,6 +8,9 @@ WrenchSimConfig.view = True
 WrenchSimConfig.render = False
 
 # Controller config
+ControllerConfig.xml_path = "examples/descriptions/toddlerbot_2xm/scene_ball.xml"
+ControllerConfig.site_names = ("left_hand_center", "right_hand_center")
+ControllerConfig.fixed_base = False
 ControllerConfig.joint_indices_by_site = {
     "left_hand_center": (30, 31, 33, 34, 36, 37, 39),
     "right_hand_center": (40, 41, 43, 44, 46, 47, 49),

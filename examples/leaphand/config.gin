@@ -8,6 +8,9 @@ WrenchSimConfig.view = True
 WrenchSimConfig.render = False
 
 # Controller config
+ControllerConfig.xml_path = "examples/descriptions/leap_hand_rotation/scene_fixed.xml"
+ControllerConfig.site_names = ("if_tip", "mf_tip", "rf_tip", "th_tip")
+ControllerConfig.fixed_base = True
 ControllerConfig.joint_indices_by_site = {
     "if_tip": (0, 1, 2, 3),
     "mf_tip": (4, 5, 6, 7),
