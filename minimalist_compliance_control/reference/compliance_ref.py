@@ -108,7 +108,9 @@ class ComplianceReference:
         )
 
         default_state = self.get_default_state()
-        self.site_home_pose = np.asarray(default_state["x_ref"], dtype=np.float32).copy()
+        self.site_home_pose = np.asarray(
+            default_state["x_ref"], dtype=np.float32
+        ).copy()
 
     def get_default_state(self) -> StateDict:
         num_sites = len(self.site_names)
@@ -233,10 +235,12 @@ class ComplianceReference:
     ) -> StateDict:
         del time_curr, model, site_names
 
-        x_ref, v_ref, a_ref, x_ref_unprojected, unreachable_mask = self.integrate_commands(
-            np.asarray(last_state["x_ref_unprojected"], dtype=np.float32),
-            np.asarray(last_state["v_ref"], dtype=np.float32),
-            command_matrix,
+        x_ref, v_ref, a_ref, x_ref_unprojected, unreachable_mask = (
+            self.integrate_commands(
+                np.asarray(last_state["x_ref_unprojected"], dtype=np.float32),
+                np.asarray(last_state["v_ref"], dtype=np.float32),
+                command_matrix,
+            )
         )
 
         base_pos_arr = (
@@ -266,7 +270,9 @@ class ComplianceReference:
             "a_ref": a_ref,
             "x_ref_unprojected": x_ref_unprojected,
             "motor_pos": motor_pos,
-            "qpos": np.asarray(last_state.get("qpos", self.default_qpos.copy()), dtype=np.float32),
+            "qpos": np.asarray(
+                last_state.get("qpos", self.default_qpos.copy()), dtype=np.float32
+            ),
             "root_ref": np.zeros(3, dtype=np.float32),
             "root_ref_world": np.zeros(3, dtype=np.float32),
             "unreachable_mask": unreachable_mask,

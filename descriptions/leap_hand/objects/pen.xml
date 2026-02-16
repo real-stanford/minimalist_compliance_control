@@ -1,0 +1,8 @@
+<mujoco>
+  <!-- Pen: thin cylinder, radius 12mm, height 260mm, mass 0.05kg -->
+  <body name="manip_object" pos="-0.13 -0.08 0.14" euler="1.57 0 0">
+    <joint type="free"/>
+    <geom name="manip_object" type="cylinder" fromto="0 0 -0.13 0 0 0.13" size="0.012" rgba="0.9 0.4 0.1 1" mass="0.05"
+      friction="0.8 0.8 0.8"/>
+  </body>
+</mujoco>

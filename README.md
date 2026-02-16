@@ -14,7 +14,15 @@ A lightweight package for MuJoCo-based compliance control and wrench estimation.
 ## Installation
 
 ```bash
+conda create -n mcc python=3.10
+conda activate mcc
 pip install -e .
+```
+
+For example stacks (model-based / diffusion-policy / VLM):
+
+```bash
+pip install -e ".[examples]"
 ```
 
 ## Core Modules
@@ -28,6 +36,6 @@ pip install -e .
 
 Example usage is documented under:
 
-- `examples/model_based/`
-- `examples/diffusion_policy/`
-- `examples/vlm/`
+- `model_based/`
+- `diffusion_policy/`
+- `vlm/`

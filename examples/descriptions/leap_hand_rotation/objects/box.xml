@@ -1,7 +1,0 @@
-<mujoco>
-  <!-- Box: 30x30x30mm, mass 0.5kg -->
-  <body name="manip_object" pos="-0.115 -0.075 0.164" euler="1.57 0 0">
-    <joint type="free"/>
-    <geom name="manip_object" type="box" size="0.03 0.03 0.03" rgba="0.2 0.8 0.3 1" mass="0.1" friction="1.0 1.0 1.0"/>
-  </body>
-</mujoco>

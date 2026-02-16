@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "minimalist_compliance_control"
 version = "0.1.0"
-description = "Minimal compliance control and wrench estimation core."
+description = "Minimal compliance control."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -19,6 +19,22 @@ dependencies = [
   "mujoco>=2.3.7",
   "mink>=0.0.6",
   "gin-config>=0.5.0",
+]
+
+[project.optional-dependencies]
+examples = [
+  "opencv-python",
+  "pyyaml",
+  "torch",
+  "torchvision",
+  "diffusers",
+  "joblib",
+  "pyzmq",
+  "requests",
+  "open3d",
+  "pycocotools",
+  "qpsolvers[osqp]",
+  "sympy",
 ]
 
 [tool.setuptools]

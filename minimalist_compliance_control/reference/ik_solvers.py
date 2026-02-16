@@ -96,7 +96,7 @@ class MinkIK:
                 self.config,
                 list(self.tasks.values()),
                 dt,
-                solver="quadprog",
+                solver="daqp",
                 damping=float(damping),
                 limits=self.limits,
             )
