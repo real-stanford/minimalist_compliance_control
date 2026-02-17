@@ -77,7 +77,7 @@ class MinkIK:
                     frame_name=site_name,
                     frame_type="site",
                     position_cost=10.0,
-                    orientation_cost=0.0 if self.ik_position_only else 0.5,
+                    orientation_cost=0.0 if self.ik_position_only else 10.0,
                     lm_damping=1.0,
                 )
                 self.tasks[site_name] = frame_task
@@ -92,14 +92,15 @@ class MinkIK:
             self.tasks[site_name].set_target(target)
 
         for _ in range(int(num_iter)):
-            vel = mink.solve_ik(
-                self.config,
-                list(self.tasks.values()),
-                dt,
-                solver="daqp",
-                damping=float(damping),
-                limits=self.limits,
-            )
+            with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                vel = mink.solve_ik(
+                    self.config,
+                    list(self.tasks.values()),
+                    dt,
+                    solver="daqp",
+                    damping=float(damping),
+                    limits=self.limits,
+                )
             self.config.integrate_inplace(vel, dt)
 
         joint_pos = self.config.data.qpos[self.joint_indices].copy()

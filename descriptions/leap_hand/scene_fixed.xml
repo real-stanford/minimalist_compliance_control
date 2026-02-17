@@ -25,18 +25,9 @@
     <camera name="side" pos="0 -0.6 0.4" xyaxes="1 0 0 0 1 3" mode="trackcom"/>
     <camera name="top" pos="0 0 0.6" xyaxes="0 1 0 -1 0 0" mode="trackcom"/>
     <camera name="front" pos="0.6 0 0.4" xyaxes="0 1 0 -1 0 3" mode="trackcom"/>
-
-    <!-- Object selection: Change the include file to switch objects -->
-    <!-- Available objects: objects/sphere.xml, objects/box.xml, objects/cylinder_short.xml, objects/pen.xml -->
-    <include file="objects/cylinder_short.xml"/>
   </worldbody>
 
   <sensor>
-    <framepos name="obj_framepos" objtype="body" objname="manip_object"/>
-    <framequat name="obj_framequat" objtype="body" objname="manip_object"/>
-    <framelinvel name="obj_framelinvel" objtype="body" objname="manip_object"/>
-    <frameangvel name="obj_frameangvel" objtype="body" objname="manip_object"/>
-
     <framepos name="th_tip_framepos" objtype="site" objname="th_tip"/>
     <framequat name="th_tip_framequat" objtype="site" objname="th_tip"/>
     <framelinvel name="th_tip_framelinvel" objtype="site" objname="th_tip"/>
@@ -58,10 +49,4 @@
     <force name="mf_tip_force" site="mf_tip"/>
     <torque name="mf_tip_torque" site="mf_tip"/>
   </sensor>
-
-  <contact>
-    <pair geom1="manip_object" geom2="if_tip" friction="0.8 0.8 0.8" solref="0.001 1" solimp="0.9 0.95 0.001"/>
-    <pair geom1="manip_object" geom2="mf_tip" friction="0.8 0.8 0.8" solref="0.001 1" solimp="0.9 0.95 0.001"/>
-    <pair geom1="manip_object" geom2="th_tip" friction="0.8 0.8 0.8" solref="0.001 1" solimp="0.9 0.95 0.001"/>
-  </contact>
 </mujoco>

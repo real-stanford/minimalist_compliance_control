@@ -24,13 +24,12 @@ import numpy.typing as npt
 import yaml
 from scipy.spatial.transform import Rotation as R
 
+from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT, ComplianceState
 from minimalist_compliance_control.controller import (
     ComplianceController,
-    ComplianceInputs,
     ComplianceRefConfig,
     ControllerConfig,
 )
-from minimalist_compliance_control.reference.compliance_ref import COMMAND_LAYOUT
 from minimalist_compliance_control.wrench_estimation import WrenchEstimateConfig
 from model_based.hybrid_servo.algorithm.ochs import solve_ochs
 from model_based.hybrid_servo.algorithm.solvehfvc import HFVC, transform_hfvc_to_global
@@ -723,13 +722,13 @@ def _reset_pose_command_to_current_sites(
 
 
 def _initialize_runtime_from_default_state(
-    default_state: dict,
+    default_state: ComplianceState,
     cfg: PolicyConfig,
     kneel_action_arr: Array,
     kneel_qpos: Array,
     kneel_qpos_source_dim: int,
 ) -> PolicyRuntime:
-    pose_command = np.asarray(default_state["x_ref"], dtype=np.float64).copy()
+    pose_command = np.asarray(default_state.x_ref, dtype=np.float64).copy()
 
     pos_kp_default = np.diag(
         [cfg.pos_stiffness_high, cfg.pos_stiffness_high, cfg.pos_stiffness_high]
@@ -1320,34 +1319,26 @@ def _run_compliance_step(
     target_motor_pos: Array,
     measured_wrenches: Dict[str, Array],
     site_names: Tuple[str, str],
-) -> tuple[Array, Optional[dict]]:
-    inputs = ComplianceInputs(
+) -> tuple[Array, Optional[ComplianceState]]:
+    wrenches_out, state_ref = controller.step(
+        command_matrix=command_matrix.astype(np.float32),
         motor_torques=np.asarray(data.actuator_force, dtype=np.float32),
         qpos=np.asarray(data.qpos, dtype=np.float32),
-        time=float(t),
-        command_matrix=command_matrix.astype(np.float32),
     )
-    out = controller.step(inputs, use_estimated_wrench=True)
 
     next_target = target_motor_pos
-    state_ref = None
-    if "state_ref" in out:
-        if isinstance(out["state_ref"], dict):
-            state_ref = out["state_ref"]
-        state_ref_motor_pos = np.asarray(
-            out["state_ref"]["motor_pos"], dtype=np.float64
-        )
+    if state_ref is not None:
+        state_ref_motor_pos = np.asarray(state_ref.motor_pos, dtype=np.float64)
         next_target = np.asarray(target_motor_pos, dtype=np.float64).copy()
         controlled_actuators = np.asarray(
             controller.compliance_ref.actuator_indices, dtype=np.int32
         )
         next_target[controlled_actuators] = state_ref_motor_pos[controlled_actuators]
 
-    if "wrenches" in out:
-        for site in site_names:
-            wrench = out["wrenches"].get(site)
-            if wrench is not None:
-                measured_wrenches[site] = np.asarray(wrench, dtype=np.float64)
+    for site in site_names:
+        wrench = wrenches_out.get(site)
+        if wrench is not None:
+            measured_wrenches[site] = np.asarray(wrench, dtype=np.float64)
 
     return next_target, state_ref
 
@@ -1373,12 +1364,11 @@ def _sync_compliance_state_to_current_pose(
         x_ref[idx, :3] = pos
         x_ref[idx, 3:] = rotvec
 
-    ref_state["x_ref"] = x_ref.copy()
-    ref_state["x_ref_unprojected"] = x_ref.copy()
-    ref_state["v_ref"] = np.zeros_like(x_ref)
-    ref_state["a_ref"] = np.zeros_like(x_ref)
-    ref_state["qpos"] = np.asarray(data.qpos, dtype=np.float32).copy()
-    ref_state["motor_pos"] = np.asarray(motor_pos, dtype=np.float32).copy()
+    ref_state.x_ref = x_ref.copy()
+    ref_state.v_ref = np.zeros_like(x_ref)
+    ref_state.a_ref = np.zeros_like(x_ref)
+    ref_state.qpos = np.asarray(data.qpos, dtype=np.float32).copy()
+    ref_state.motor_pos = np.asarray(motor_pos, dtype=np.float32).copy()
     controller._last_state = ref_state
 
 
@@ -1422,15 +1412,12 @@ def _update_mocap_targets_from_state_ref(
     data: mujoco.MjData,
     left_mocap_id: Optional[int],
     right_mocap_id: Optional[int],
-    state_ref: Optional[dict],
+    state_ref: Optional[ComplianceState],
 ) -> None:
     if state_ref is None:
         return
-    x_ref = state_ref.get("x_ref")
-    if x_ref is None:
-        return
 
-    x_ref_arr = np.asarray(x_ref, dtype=np.float64)
+    x_ref_arr = np.asarray(state_ref.x_ref, dtype=np.float64)
     if x_ref_arr.ndim != 2 or x_ref_arr.shape[1] < 6:
         return
 
@@ -1510,8 +1497,8 @@ def main() -> None:
     kneel_action_arr, kneel_qpos, kneel_qpos_source_dim = _load_kneel_trajectory(
         example_dir=os.path.join(repo_root, "model_based"),
         cfg=cfg,
-        default_motor_pos=np.asarray(default_state["motor_pos"], dtype=np.float64),
-        default_qpos=np.asarray(default_state["qpos"], dtype=np.float64),
+        default_motor_pos=np.asarray(default_state.motor_pos, dtype=np.float64),
+        default_qpos=np.asarray(default_state.qpos, dtype=np.float64),
         motor_dim=model.nu,
         qpos_dim=model.nq,
     )
@@ -1524,10 +1511,10 @@ def main() -> None:
         kneel_qpos_source_dim=kneel_qpos_source_dim,
     )
 
-    default_motor_pos = np.asarray(default_state["motor_pos"], dtype=np.float64).copy()
+    default_motor_pos = np.asarray(default_state.motor_pos, dtype=np.float64).copy()
     prep_init_motor_pos = np.asarray(data.qpos[qpos_adr], dtype=np.float64).copy()
     target_motor_pos = prep_init_motor_pos.copy()
-    latest_state_ref: Optional[dict] = None
+    latest_state_ref: Optional[ComplianceState] = None
     prep_delta_max = float(np.max(np.abs(prep_init_motor_pos - default_motor_pos)))
     prep_delta_mean = float(np.mean(np.abs(prep_init_motor_pos - default_motor_pos)))
     measured_wrenches: Dict[str, Array] = {

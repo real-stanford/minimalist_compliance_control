@@ -110,8 +110,8 @@ interphalangeal} joints.
       <geom group="3" material="black"/>
     </default>
     <default class="tip">
-      <geom size="0.01 0.012 0.016" pos="-0.0012969 -0.0335524 0.0145207"
-        quat="0.703552 0.709596 -0.0292107 -0.0252203" type="box" friction="0.7 0.05 0.0002" group="3" rgba=".5 .5 .5 .3"/>
+      <geom size="0.01 0.012 0.016" pos="-0.0012969 -0.0335524 0.0145207" quat="0.703552 0.709596 -0.0292107 -0.0252203"
+        type="box" friction="0.7 0.05 0.0002" group="3" rgba=".5 .5 .5 .3"/>
     </default>
     <default class="thumb_tip">
       <geom size="0.01 0.012 0.016" pos="-0.00127744 -0.0455619 -0.0144774"
@@ -279,7 +279,7 @@ interphalangeal} joints.
           <geom name="if_px_visual" pos="0.0096 0.0002 0.0007" quat="0.500003 -0.5 -0.5 -0.499997" class="visual"
             mesh="proximal"/>
           <geom name="if_px_collision" size="0.017 0.013 0.011" pos="0.0075 -0.0002 -0.011" type="box" class="collision"/>
-          
+
           <body name="if_md" pos="0.015 0.0143 -0.013" quat="0.500003 0.5 -0.5 0.499997">
             <inertial pos="0.0054215 -0.029148 0.015" quat="0.687228 0.687228 0.166487 0.166487" mass="0.037"
               diaginertia="8.28004e-06 8.1598e-06 5.39516e-06"/>

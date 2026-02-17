@@ -18,10 +18,10 @@ A lightweight MuJoCo compliance-control package with:
 - `minimalist_compliance_control/wrench_estimation.py`
   - Dense/axis-projected wrench recovery from Jacobians and external torque estimate.
   - `WrenchEstimateConfig` controls force/torque regularization and axis behavior.
-- `minimalist_compliance_control/reference/compliance_ref.py`
+- `minimalist_compliance_control/compliance_ref.py`
   - Defines `COMMAND_LAYOUT` (54-wide command matrix slices).
   - Integrates pose/velocity references and calls IK (`MinkIK`) to produce actuator refs.
-- `minimalist_compliance_control/reference/ik_solvers.py`
+- `minimalist_compliance_control/ik_solvers.py`
   - `MinkIK` builds Mink posture + site tasks and solves iterative IK.
 - `minimalist_compliance_control/controller.py`
   - Pipeline: state sync -> per-site wrench estimation -> optional measured wrench injection into command matrix -> optional compliance state update.
@@ -52,7 +52,7 @@ This layout is the shared interface across core, model-based, diffusion-policy, 
 ## Config and Robot Assets
 - Gin configs:
   - `config/toddlerbot.gin`
-  - `config/leaphand.gin`
+  - `config/leap.gin`
   - `config/toddlerbot_model_based.gin`
 - Robot/environment descriptions under `descriptions/`:
   - toddlerbot XML/URDF/YAML variants,
@@ -77,8 +77,8 @@ Optional example deps:
 ## Practical Entry Points
 - Core package install: `pip install -e .`
 - Basic examples:
-  - `python examples/run_toddlerbot_compliance.py`
-  - `python examples/run_leap_compliance.py`
+  - `python examples/run_compliance.py --robot toddlerbot`
+  - `python examples/run_compliance.py --robot leap`
 - Model-based:
   - `python examples/run_toddlerbot_model_based.py`
   - `python examples/run_leap_model_based.py`

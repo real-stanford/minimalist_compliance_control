@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
-from minimalist_compliance_control.reference.compliance_ref import COMMAND_LAYOUT
+from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT
 
 from .utils.camera import Camera
 from .utils.math_utils import ensure_matrix, get_damping_matrix

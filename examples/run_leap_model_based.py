@@ -14,13 +14,12 @@ import yaml
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 
+from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT
 from minimalist_compliance_control.controller import (
     ComplianceController,
-    ComplianceInputs,
     ComplianceRefConfig,
     ControllerConfig,
 )
-from minimalist_compliance_control.reference.compliance_ref import COMMAND_LAYOUT
 from minimalist_compliance_control.wrench_estimation import WrenchEstimateConfig
 from model_based.hybrid_servo.algorithm.ochs import solve_ochs
 from model_based.hybrid_servo.algorithm.solvehfvc import transform_hfvc_to_global
@@ -1527,7 +1526,7 @@ def _build_controller(scene_xml_path: str, control_dt: float) -> ComplianceContr
         force_reg=1e-3,
         torque_reg=1e-2,
         force_only=False,
-        estimate_full_wrench=True,
+        axis_aligned=False,
         normal_axis="+z",
     )
 
@@ -1621,7 +1620,7 @@ def _parse_args() -> argparse.Namespace:
         "--scene-xml",
         type=str,
         default="",
-        help="Path to MuJoCo scene xml (default: leap_hand/scene_fixed.xml).",
+        help="Path to MuJoCo scene xml (default: leap_hand/scene_object_fixed.xml).",
     )
     parser.add_argument(
         "--duration",
@@ -1685,7 +1684,7 @@ def main() -> None:
             repo_root,
             "descriptions",
             "leap_hand",
-            "scene_fixed.xml",
+            "scene_object_fixed.xml",
         )
 
     controller = _build_controller(scene_xml_path, args.control_dt)
@@ -1810,16 +1809,14 @@ def main() -> None:
                         measured_wrenches=measured_wrenches,
                     )
 
-                    inputs = ComplianceInputs(
+                    _, state_ref = controller.step(
+                        command_matrix=command_matrix,
                         motor_torques=np.asarray(data.actuator_force, dtype=np.float32),
                         qpos=np.asarray(data.qpos, dtype=np.float32),
-                        time=sim_time,
-                        command_matrix=command_matrix,
                     )
-                    out = controller.step(inputs, use_estimated_wrench=False)
-                    if "state_ref" in out:
+                    if state_ref is not None:
                         target_motor_pos = np.asarray(
-                            out["state_ref"]["motor_pos"], dtype=np.float32
+                            state_ref.motor_pos, dtype=np.float32
                         )
                 next_control_time += control_dt
 

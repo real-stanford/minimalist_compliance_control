@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core", "pybind11"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "minimalist_compliance_control"
@@ -10,8 +10,18 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-  {name = "Songbo Hu"},
-  {name = "Haochen Shi"}
+  {name = "Haochen Shi"},
+  {name = "Songbo Hu"}
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
   "numpy>=1.23",
@@ -23,8 +33,10 @@ dependencies = [
 
 [project.optional-dependencies]
 examples = [
+  "adafruit-circuitpython-bno08x",
   "opencv-python",
   "pyyaml",
+  "pyserial",
   "torch",
   "torchvision",
   "diffusers",
@@ -33,12 +45,30 @@ examples = [
   "requests",
   "open3d",
   "pycocotools",
+  "moviepy",
   "qpsolvers[osqp]",
   "sympy",
 ]
 
-[tool.setuptools]
-packages = [
+[project.scripts]
+mcc-run-compliance = "examples.run_compliance:main"
+mcc-run-toddlerbot-model-based = "examples.run_toddlerbot_model_based:main"
+mcc-run-leap-model-based = "examples.run_leap_model_based:main"
+mcc-run-compliance-dp = "examples.run_compliance_dp:main"
+mcc-run-compliance-vlm = "examples.run_compliance_vlm:main"
+
+[tool.scikit-build]
+wheel.packages = [
   "minimalist_compliance_control",
-  "minimalist_compliance_control.reference",
+  "config",
+  "examples",
+  "model_based",
+  "diffusion_policy",
+  "vlm",
+  "descriptions",
+  "real_world",
 ]
+build.verbose = true
+
+[tool.scikit-build.cmake.define]
+BUILD_DYNAMIXEL = "OFF"

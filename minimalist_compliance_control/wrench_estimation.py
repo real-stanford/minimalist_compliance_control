@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
+import gin
 import numpy as np
 import numpy.typing as npt
-import gin
 
 AXIS_MAP: Dict[str, Tuple[int, float]] = {
     "+x": (0, 1.0),
@@ -25,7 +25,7 @@ class WrenchEstimateConfig:
     force_reg: float = 1e-3
     torque_reg: float = 1e-2
     force_only: bool = False
-    estimate_full_wrench: bool = True
+    axis_aligned: bool = False
     normal_axis: str | int = "+z"
 
 
@@ -65,7 +65,7 @@ def estimate_wrench(
     site_rotmat: npt.NDArray[np.float32],
     config: WrenchEstimateConfig,
 ) -> npt.NDArray[np.float32]:
-    if config.estimate_full_wrench:
+    if not config.axis_aligned:
         force_vec = solve_dense_component(jacp, tau_ext, config.force_reg)
         torque_vec = (
             np.zeros(3, dtype=np.float32)

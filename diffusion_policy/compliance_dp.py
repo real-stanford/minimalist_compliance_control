@@ -20,7 +20,7 @@ import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 
-from minimalist_compliance_control.reference.compliance_ref import COMMAND_LAYOUT
+from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT
 
 from .dp_model import DPModel
 

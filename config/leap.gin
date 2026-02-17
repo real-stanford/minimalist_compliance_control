@@ -35,27 +35,26 @@ ControllerConfig.base_body_name = ""
 WrenchEstimateConfig.force_reg = 1e-3
 WrenchEstimateConfig.torque_reg = 1e-2
 WrenchEstimateConfig.force_only = False
-WrenchEstimateConfig.estimate_full_wrench = True
+WrenchEstimateConfig.axis_aligned = False
 WrenchEstimateConfig.normal_axis = "+z"
 
 # Compliance reference (fixed base)
 ComplianceRefConfig.dt = 0.02
 ComplianceRefConfig.q_start_idx = 0
 ComplianceRefConfig.qd_start_idx = 0
-ComplianceRefConfig.ik_position_only = False
+ComplianceRefConfig.ik_position_only = True
 ComplianceRefConfig.fixed_model_xml_path = "descriptions/leap_hand/left_hand_fixed.xml"
 ComplianceRefConfig.mass = 1.0
 ComplianceRefConfig.inertia_diag = (1.0, 1.0, 1.0)
-ComplianceRefConfig.mink_num_iter = 5
-ComplianceRefConfig.mink_damping = 1e-2
+ComplianceRefConfig.mink_num_iter = 1
+ComplianceRefConfig.mink_damping = 0.1
 ComplianceRefConfig.actuator_indices = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
 ComplianceRefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 ComplianceRefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 # Runner config
-RunnerConfig.kp_pos = 150.0
-RunnerConfig.kp_rot = 5.0
-RunnerConfig.wrench_debug_site = "if_tip"
+RunnerConfig.kp_pos = 100.0
+RunnerConfig.kp_rot = 10.0
 RunnerConfig.initial_pose = (
     (0.052, -0.1, 0.247, -3.14, 0.0, 0.0),
     (0.052, -0.055, 0.247, -3.14, 0.0, 0.0),

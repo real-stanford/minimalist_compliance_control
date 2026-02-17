@@ -5,41 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
-import numpy as np
-import numpy.typing as npt
 import gin
 import mujoco
+import numpy as np
+import numpy.typing as npt
 
+from minimalist_compliance_control.compliance_ref import (
+    COMMAND_LAYOUT,
+    ComplianceReference,
+    ComplianceState,
+)
 from minimalist_compliance_control.wrench_estimation import (
     WrenchEstimateConfig,
     estimate_wrench,
 )
 from minimalist_compliance_control.wrench_sim import WrenchSim, WrenchSimConfig
-from minimalist_compliance_control.reference.compliance_ref import (
-    COMMAND_LAYOUT,
-    ComplianceReference,
-)
-
-
-@dataclass
-class ComplianceInputs:
-    """Inputs at each control step (pre-compliance state)."""
-
-    motor_torques: npt.NDArray[np.float32]
-    joint_pos: Optional[npt.NDArray[np.float32]] = None
-    qpos: Optional[npt.NDArray[np.float32]] = None
-    base_pos: Optional[npt.NDArray[np.float32]] = None
-    base_quat: Optional[npt.NDArray[np.float32]] = None
-    time: float = 0.0
-    command_matrix: Optional[npt.NDArray[np.float32]] = None
-
-
-@dataclass
-class ComplianceRefOutput:
-    """Output from a compliance reference (e.g., command matrix)."""
-
-    command_matrix: npt.NDArray[np.float32]
-    last_state: Optional[dict] = None
 
 
 @gin.configurable
@@ -110,8 +90,7 @@ class ComplianceController:
             missing_cfg.append("ControllerConfig.fixed_base")
         if missing_cfg:
             raise ValueError(
-                "Missing required controller configuration: "
-                + ", ".join(missing_cfg)
+                "Missing required controller configuration: " + ", ".join(missing_cfg)
             )
 
         self.config = config
@@ -127,7 +106,7 @@ class ComplianceController:
         )
         self.ref_config = ref_config or ComplianceRefConfig()
         self.compliance_ref: Optional[ComplianceReference] = None
-        self._last_state: Optional[dict] = None
+        self._last_state: Optional[ComplianceState] = None
         self._build_compliance_ref()
 
     @classmethod
@@ -262,40 +241,57 @@ class ComplianceController:
 
     def step(
         self,
-        inputs: ComplianceInputs,
-        use_estimated_wrench: bool = False,
-    ) -> Dict[str, npt.NDArray[np.float32] | dict]:
-        """Run one loop and return estimated wrenches (and optionally state_ref)."""
-        if inputs.qpos is not None:
-            self.wrench_sim.set_qpos(inputs.qpos)
-        elif inputs.joint_pos is not None:
-            joint_pos = np.asarray(inputs.joint_pos, dtype=np.float32).reshape(-1)
-            if joint_pos.size in (self.wrench_sim.model.nq, self.wrench_sim.model.njnt):
-                self.wrench_sim.set_joint_positions(joint_pos)
+        command_matrix: npt.NDArray[np.float32],
+        motor_torques: npt.NDArray[np.float32],
+        joint_pos: Optional[npt.NDArray[np.float32]] = None,
+        qpos: Optional[npt.NDArray[np.float32]] = None,
+        motor_pos: Optional[npt.NDArray[np.float32]] = None,
+        base_pos: Optional[npt.NDArray[np.float32]] = None,
+        base_quat: Optional[npt.NDArray[np.float32]] = None,
+    ) -> tuple[Dict[str, npt.NDArray[np.float32]], Optional[ComplianceState]]:
+        """Run one loop and return estimated wrenches and optional compliance state."""
+        command_matrix = np.asarray(command_matrix, dtype=np.float32).copy()
+        if qpos is not None:
+            self.wrench_sim.set_qpos(qpos)
+        elif joint_pos is not None:
+            joint_pos_arr = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
+            if joint_pos_arr.size in (
+                self.wrench_sim.model.nq,
+                self.wrench_sim.model.njnt,
+            ):
+                self.wrench_sim.set_joint_positions(joint_pos_arr)
             elif (
                 self._joint_dof_union is not None
-                and joint_pos.size == self._joint_dof_union.size
+                and joint_pos_arr.size == self._joint_dof_union.size
             ):
-                self.wrench_sim.set_dof_positions(self._joint_dof_union, joint_pos)
+                self.wrench_sim.set_dof_positions(self._joint_dof_union, joint_pos_arr)
             else:
                 raise ValueError(
                     "joint_pos length does not match model.nq/model.njnt or joint_indices_by_site union."
                 )
         else:
-            motor_pos = (
-                np.asarray(inputs.motor_pos, dtype=np.float32)
-                if inputs.motor_pos is not None
+            motor_pos_arr = (
+                np.asarray(motor_pos, dtype=np.float32)
+                if motor_pos is not None
                 else np.asarray(self._default_motor_pos, dtype=np.float32)
             )
-            self.wrench_sim.set_motor_angles(motor_pos)
+            self.wrench_sim.set_motor_angles(motor_pos_arr)
         self.wrench_sim.forward()
         if getattr(self.wrench_sim.config, "view", False):
             self.wrench_sim.visualize()
         if getattr(self.wrench_sim.config, "render", False):
             self.wrench_sim.record_frame()
 
-        base_pos = None
-        base_quat = None
+        base_pos_est = (
+            np.asarray(base_pos, dtype=np.float32).copy()
+            if base_pos is not None
+            else None
+        )
+        base_quat_est = (
+            np.asarray(base_quat, dtype=np.float32).copy()
+            if base_quat is not None
+            else None
+        )
         if self.config.base_body_name:
             base_body_id = mujoco.mj_name2id(
                 self.wrench_sim.model,
@@ -303,10 +299,10 @@ class ComplianceController:
                 self.config.base_body_name,
             )
             if base_body_id >= 0:
-                base_pos = np.asarray(
+                base_pos_est = np.asarray(
                     self.wrench_sim.data.xpos[base_body_id], dtype=np.float32
                 )
-                base_quat = np.asarray(
+                base_quat_est = np.asarray(
                     self.wrench_sim.data.xquat[base_body_id], dtype=np.float32
                 )
                 # print(
@@ -314,6 +310,7 @@ class ComplianceController:
                 # )
 
         wrenches: Dict[str, npt.NDArray[np.float32]] = {}
+        motor_torques_arr = np.asarray(motor_torques, dtype=np.float32)
         bias = self.wrench_sim.bias_torque()
         for site in self.config.site_names:
             jacp, jacr = self.wrench_sim.site_jacobian(site)
@@ -325,7 +322,7 @@ class ComplianceController:
                 )
 
             if self.config.motor_indices_by_site is None:
-                tau_raw = np.asarray(inputs.motor_torques, dtype=np.float32)
+                tau_raw = motor_torques_arr
             else:
                 motor_idx = np.asarray(
                     self.config.motor_indices_by_site[site], dtype=np.int32
@@ -336,15 +333,10 @@ class ComplianceController:
                     else None
                 )
                 if gear is None:
-                    tau_raw = np.asarray(inputs.motor_torques, dtype=np.float32)[
-                        motor_idx
-                    ]
+                    tau_raw = motor_torques_arr[motor_idx]
                 else:
                     gear = np.asarray(gear, dtype=np.float32)
-                    tau_raw = (
-                        np.asarray(inputs.motor_torques, dtype=np.float32)[motor_idx]
-                        * gear
-                    )
+                    tau_raw = motor_torques_arr[motor_idx] * gear
 
             tau_bias = bias[joint_idx]
             tau_ext = -(tau_raw - tau_bias)
@@ -361,29 +353,24 @@ class ComplianceController:
             )
             wrenches[site] = wrench
 
-        result: Dict[str, npt.NDArray[np.float32] | dict] = {"wrenches": wrenches}
-        command_matrix = inputs.command_matrix
-        if use_estimated_wrench and command_matrix is not None:
-            command_matrix = np.asarray(command_matrix, dtype=np.float32).copy()
-            for idx, site in enumerate(self.config.site_names):
-                wrench = wrenches.get(site)
-                if wrench is None:
-                    continue
-                command_matrix[idx, COMMAND_LAYOUT.measured_force] = wrench[:3]
-                command_matrix[idx, COMMAND_LAYOUT.measured_torque] = wrench[3:6]
+        state_ref: Optional[ComplianceState] = None
+        for idx, site in enumerate(self.config.site_names):
+            wrench = wrenches.get(site)
+            if wrench is None:
+                continue
+            command_matrix[idx, COMMAND_LAYOUT.measured_force] = wrench[:3]
+            command_matrix[idx, COMMAND_LAYOUT.measured_torque] = wrench[3:6]
 
-        if self.compliance_ref is not None and command_matrix is not None:
+        if self.compliance_ref is not None:
             if self._last_state is None:
                 self._last_state = self.compliance_ref.get_default_state()
             state_ref = self.compliance_ref.get_state_ref(
-                time_curr=float(inputs.time),
                 command_matrix=command_matrix,
                 last_state=self._last_state,
                 model=self.wrench_sim.model,
                 data=self.wrench_sim.data,
-                base_pos=base_pos,
-                base_quat=base_quat,
+                base_pos=base_pos_est,
+                base_quat=base_quat_est,
             )
             self._last_state = state_ref
-            result["state_ref"] = state_ref
-        return result
+        return wrenches, state_ref
