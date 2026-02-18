@@ -1521,7 +1521,7 @@ class _tb_PolicyConfig:
     contact_wait_duration: float = 0.0
     pid_kp: float = 0.0
     kneel_motion_file: str = "descriptions/toddlerbot_2xm/kneel_2xm.lz4"
-    initial_active_hands_mode: str = "both"
+    initial_active_hands_mode: str = "left"
     threshold_angle: float = np.pi / 6.0
     threshold_angle_z: float = np.pi / 4.0
     print_ochs_world_velocity: bool = False

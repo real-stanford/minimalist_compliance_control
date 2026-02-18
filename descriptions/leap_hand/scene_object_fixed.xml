@@ -29,8 +29,8 @@
 
     <!-- Object selection: uncomment one include below -->
     <!-- <include file="objects/sphere.xml"/> -->
-    <include file="objects/box.xml"/>
-    <!-- <include file="objects/cylinder_short.xml"/> -->
+    <!-- <include file="objects/box.xml"/> -->
+    <include file="objects/cylinder_short.xml"/>
     <!-- <include file="objects/pen.xml"/> -->
   </worldbody>
 

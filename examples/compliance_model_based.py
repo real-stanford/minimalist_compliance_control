@@ -460,7 +460,7 @@ class ToddlerBotModelBasedPolicy:
                 self.data.body_xpos[ball_body_id], dtype=np.float64
             ).copy()
         except Exception:
-            self.default_ball_pos = np.array([0.24, -0.015, 0.08], dtype=np.float64)
+            self.default_ball_pos = np.array([0.24, -0.0, 0.08], dtype=np.float64)
         self.ball_pos_estimate_log: list[np.ndarray] = []
         self.done = False
 

@@ -10,7 +10,7 @@
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" condim="3"/>
-    <body name="rolling_ball" pos="0.24 -0.015 0.08">
+    <body name="rolling_ball" pos="0.24 -0.0 0.08">
       <freejoint name="rolling_ball_joint"/>
       <geom name="rolling_ball_geom" type="sphere" size="0.08" material="rolling_ball" mass="0.2" friction="0.8 0.0 0.0"
         class="visual"/>
