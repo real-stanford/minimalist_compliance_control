@@ -46,6 +46,7 @@ class RealWorld:
         self.wrench_sim = wrench_sim
         self.model = wrench_sim.model
         self.data = wrench_sim.data
+        self.name = "real"
         self.control_dt = float(control_dt)
         if self.control_dt <= 0.0:
             raise ValueError("control_dt must be > 0.")

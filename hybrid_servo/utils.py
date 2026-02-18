@@ -1516,13 +1516,13 @@ class _tb_PolicyConfig:
 
     approach_angle_offset: float = np.pi / 5.0
     approach_interp_duration: float = 1.5
-    distance_threshold_margin: float = 0.015
+    distance_threshold_margin: float = 0.005
     approach_timeout: float = 5.0
     contact_wait_duration: float = 0.0
     pid_kp: float = 0.0
     kneel_motion_file: str = "descriptions/toddlerbot_2xm/kneel_2xm.lz4"
-    initial_active_hands_mode: str = "left"
-    threshold_angle: float = np.pi / 5.0
+    initial_active_hands_mode: str = "both"
+    threshold_angle: float = np.pi / 6.0
     threshold_angle_z: float = np.pi / 4.0
     print_ochs_world_velocity: bool = False
     ochs_print_interval: float = 0.2
@@ -2060,9 +2060,23 @@ def _tb__build_contact_state(
     data: mujoco.MjData,
     left_site_id: int,
     right_site_id: int,
+    ball_pos: Optional[_tb_Array] = None,
 ) -> Dict[str, _tb_Array]:
+    if ball_pos is None:
+        try:
+            ball_body_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_BODY, "rolling_ball"
+            )
+            if ball_body_id < 0:
+                raise KeyError("Body 'rolling_ball' not found.")
+            ball_pos = np.asarray(data.body_xpos[ball_body_id], dtype=np.float64).copy()
+        except Exception:
+            ball_pos = _tb__sensor_data(model, data, "rolling_ball_framepos")
+    else:
+        ball_pos = np.asarray(ball_pos, dtype=np.float64).reshape(3).copy()
+
     state: Dict[str, _tb_Array] = {
-        "ball_pos": _tb__sensor_data(model, data, "rolling_ball_framepos"),
+        "ball_pos": ball_pos,
         # Keep consistency with toddlerbot_internal model-based policy state packing.
         "ball_quat": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
         "ball_linvel": np.array([0.0, 0.0, 0.0], dtype=np.float64),

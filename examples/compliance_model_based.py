@@ -450,13 +450,56 @@ class ToddlerBotModelBasedPolicy:
             passive_active_ratio=float(passive_active_ratio),
         )
         self.substep_control = substep_control
+        try:
+            ball_body_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, "rolling_ball"
+            )
+            if ball_body_id < 0:
+                raise KeyError("Body 'rolling_ball' not found.")
+            self.default_ball_pos = np.asarray(
+                self.data.body_xpos[ball_body_id], dtype=np.float64
+            ).copy()
+        except Exception:
+            self.default_ball_pos = np.array([0.24, -0.015, 0.08], dtype=np.float64)
+        self.ball_pos_estimate_log: list[np.ndarray] = []
         self.done = False
 
+    def update_ball_pose_estimate(
+        self, obs: Any, sim: Any, is_real: bool
+    ) -> np.ndarray:
+        if not is_real:
+            try:
+                ball_body_id = sim.model.body("rolling_ball").id
+                return np.asarray(
+                    sim.data.body_xpos[ball_body_id], dtype=np.float64
+                ).copy()
+            except Exception:
+                pass
+
+        ball_pos_obs = None
+        if obs is not None and hasattr(obs, "get"):
+            ball_pos_obs = obs.get("ball_pos", None)
+        if ball_pos_obs is not None:
+            ball_pos_arr = np.asarray(ball_pos_obs, dtype=np.float64).reshape(-1)
+            if ball_pos_arr.shape[0] >= 3:
+                return ball_pos_arr[:3].copy()
+
+        if self.ball_pos_estimate_log:
+            return self.ball_pos_estimate_log[-1].copy()
+        return self.default_ball_pos.copy()
+
     def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
-        del sim
         t = float(obs.get("time", self.data.time))
+        ball_pos = self.update_ball_pose_estimate(obs, sim, "real" in sim.name)
+        self.ball_pos_estimate_log.append(
+            np.asarray(ball_pos, dtype=np.float64).reshape(3).copy()
+        )
         state = _tb__build_contact_state(
-            self.model, self.data, self.left_site_id, self.right_site_id
+            self.model,
+            self.data,
+            self.left_site_id,
+            self.right_site_id,
+            ball_pos=ball_pos,
         )
         if self.runtime.phase == "prep":
             if t < float(self.cfg.prep_duration):
@@ -580,6 +623,16 @@ class ToddlerBotModelBasedPolicy:
                     total_angular_velocity_dir = (
                         total_angular_velocity_vec / total_angular_velocity_mag
                     )
+                print(
+                    "[model_based][goal_velocity] "
+                    f"t={float(t):.3f} "
+                    f"base={float(self.runtime.goal_angular_velocity):.6f} "
+                    f"delta={np.asarray(self.runtime.delta_goal_angular_velocity, dtype=np.float64).tolist()} "
+                    f"total_vec={total_angular_velocity_vec.tolist()} "
+                    f"total_mag={total_angular_velocity_mag:.6f} "
+                    f"goal_angle={float(self.runtime.goal_angle):.6f}rad "
+                    f"({np.degrees(float(self.runtime.goal_angle)):.2f}deg)"
+                )
                 min_hand_force = (
                     self.cfg.min_hand_normal_force_both
                     if self.runtime.active_hands_mode == "both"

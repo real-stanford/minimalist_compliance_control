@@ -116,6 +116,7 @@ class MuJoCoSim:
         self.wrench_sim = wrench_sim
         self.model = wrench_sim.model
         self.data = wrench_sim.data
+        self.name = "mujoco"
         self.vis = bool(vis)
         self.substep_control = substep_control
         self.control_dt = float(control_dt)
