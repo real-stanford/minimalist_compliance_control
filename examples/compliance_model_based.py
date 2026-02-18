@@ -196,6 +196,8 @@ class LeapModelBasedPolicy:
             self.controller.compliance_ref.default_motor_pos, dtype=np.float32
         )
         self.measured_wrenches: dict[str, np.ndarray] = {}
+        # Align with toddlerbot_internal EstimateWrenchPolicy default for leap.
+        self.wrench_filter_alpha = 0.9
         self.control_dt = float(self.controller.ref_config.dt)
 
         trnid = np.asarray(self.model.actuator_trnid[:, 0], dtype=np.int32)
@@ -227,6 +229,7 @@ class LeapModelBasedPolicy:
 
         def _extra_substep(_data: mujoco.MjData) -> None:
             sim_time_local = float(_data.time)
+            # Keep object fixed during prep and close to prevent pre-grasp drift.
             if sim_time_local < self.prep_duration or self.policy.phase == "close":
                 leap_rotate_policy_capture_object_init(self.policy)
                 leap_rotate_policy_fix_object(
@@ -254,6 +257,29 @@ class LeapModelBasedPolicy:
         self.status_interval = max(float(args.status_interval), 1e-3)
         self.next_status_time = 0.0
         self.done = False
+        self._compliance_state_synced = False
+
+    def _update_measured_wrenches(self) -> None:
+        """Use ground-truth wrench with internal-style EMA smoothing."""
+        raw_wrenches = _get_ground_truth_wrenches(
+            self.model, self.data, self.site_names
+        )
+        alpha = float(np.clip(self.wrench_filter_alpha, 0.0, 1.0))
+        filtered: dict[str, np.ndarray] = {}
+        for site_name in self.site_names:
+            current = np.asarray(
+                raw_wrenches.get(site_name, np.zeros(6, dtype=np.float32)),
+                dtype=np.float32,
+            )
+            prev = self.measured_wrenches.get(site_name)
+            if prev is None:
+                filtered_val = current
+            else:
+                filtered_val = (
+                    alpha * current + (1.0 - alpha) * np.asarray(prev, dtype=np.float32)
+                )
+            filtered[site_name] = filtered_val.astype(np.float32)
+        self.measured_wrenches = filtered
 
     def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
         del sim
@@ -263,9 +289,7 @@ class LeapModelBasedPolicy:
             self.done = True
             return {}, self.target_motor_pos.copy()
 
-        self.measured_wrenches = _get_ground_truth_wrenches(
-            self.model, self.data, self.site_names
-        )
+        self._update_measured_wrenches()
         if sim_time < self.prep_duration:
             leap_rotate_policy_step(
                 self.policy,
@@ -285,13 +309,78 @@ class LeapModelBasedPolicy:
             else:
                 self.target_motor_pos = self.prep_target_motor_pos.copy()
         else:
-            policy_out = leap_rotate_policy_step(
+            if not self._compliance_state_synced:
+                _tb__sync_compliance_state_to_current_pose(
+                    self.controller, self.data, self.target_motor_pos
+                )
+                self._compliance_state_synced = True
+                print(
+                    "[leaphand] Synced compliance state to current pose at model-based start."
+                )
+            phase_before = str(self.policy.phase)
+            leap_rotate_policy_step(
                 self.policy,
                 time_curr=sim_time,
                 wrenches_by_site=self.measured_wrenches,
                 sim_name="sim",
                 is_real_world=False,
             )
+            phase_after = str(self.policy.phase)
+            if phase_before != phase_after and phase_after == "rotate":
+                _tb__sync_compliance_state_to_current_pose(
+                    self.controller, self.data, self.target_motor_pos
+                )
+                if "th_tip" in self.site_names:
+                    thumb_idx = self.site_names.index("th_tip")
+                    thumb_xref = np.asarray(
+                        self.policy.pose_command[thumb_idx], dtype=np.float64
+                    )
+                    print(
+                        "[leaphand][rotate_start] "
+                        f"thumb_xref={np.round(thumb_xref, 6).tolist()}"
+                    )
+                # Run one more policy tick at the same simulation time so rotate-phase
+                # commands (kp/wrench/pose updates) are applied in this very frame.
+                leap_rotate_policy_step(
+                    self.policy,
+                    time_curr=sim_time,
+                    wrenches_by_site=self.measured_wrenches,
+                    sim_name="sim",
+                    is_real_world=False,
+                )
+            if str(self.policy.phase) == "rotate" and "th_tip" in self.site_names:
+                mode = str(getattr(self.policy, "control_mode", "unknown"))
+                if mode in ("translation", "rotation"):
+                    thumb_idx = self.site_names.index("th_tip")
+                    thumb_xref = np.asarray(
+                        self.policy.pose_command[thumb_idx], dtype=np.float64
+                    )
+                    print(
+                        "[leaphand][thumb_xref] "
+                        f"t={sim_time:.3f} "
+                        f"mode={mode} "
+                        f"xref={np.round(thumb_xref, 6).tolist()}"
+                    )
+            policy_out = {
+                "pose_command": np.asarray(
+                    self.policy.pose_command, dtype=np.float32
+                ).copy(),
+                "wrench_command": np.asarray(
+                    self.policy.wrench_command, dtype=np.float32
+                ).copy(),
+                "pos_stiffness": np.asarray(
+                    self.policy.pos_stiffness, dtype=np.float32
+                ).copy(),
+                "rot_stiffness": np.asarray(
+                    self.policy.rot_stiffness, dtype=np.float32
+                ).copy(),
+                "pos_damping": np.asarray(
+                    self.policy.pos_damping, dtype=np.float32
+                ).copy(),
+                "rot_damping": np.asarray(
+                    self.policy.rot_damping, dtype=np.float32
+                ).copy(),
+            }
             command_matrix = _build_command_matrix(
                 site_names=self.site_names,
                 policy_out=policy_out,
@@ -303,6 +392,7 @@ class LeapModelBasedPolicy:
                 command_matrix=command_matrix,
                 motor_torques=motor_tor_obs,
                 qpos=qpos_obs,
+                use_estimated_wrench=False,
             )
             if state_ref is not None:
                 self.target_motor_pos = np.asarray(

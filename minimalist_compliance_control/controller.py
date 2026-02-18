@@ -250,6 +250,7 @@ class ComplianceController:
         motor_pos: Optional[npt.NDArray[np.float32]] = None,
         base_pos: Optional[npt.NDArray[np.float32]] = None,
         base_quat: Optional[npt.NDArray[np.float32]] = None,
+        use_estimated_wrench: bool = True,
     ) -> tuple[Dict[str, npt.NDArray[np.float32]], Optional[ComplianceState]]:
         """Run one loop and return estimated wrenches and optional compliance state."""
         command_matrix = np.asarray(command_matrix, dtype=np.float32).copy()
@@ -356,12 +357,13 @@ class ComplianceController:
             wrenches[site] = wrench
 
         state_ref: Optional[ComplianceState] = None
-        for idx, site in enumerate(self.config.site_names):
-            wrench = wrenches.get(site)
-            if wrench is None:
-                continue
-            command_matrix[idx, COMMAND_LAYOUT.measured_force] = wrench[:3]
-            command_matrix[idx, COMMAND_LAYOUT.measured_torque] = wrench[3:6]
+        if use_estimated_wrench:
+            for idx, site in enumerate(self.config.site_names):
+                wrench = wrenches.get(site)
+                if wrench is None:
+                    continue
+                command_matrix[idx, COMMAND_LAYOUT.measured_force] = wrench[:3]
+                command_matrix[idx, COMMAND_LAYOUT.measured_torque] = wrench[3:6]
 
         if self.compliance_ref is not None:
             if self._last_state is None:
