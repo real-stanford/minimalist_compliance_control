@@ -92,6 +92,9 @@ class MinkIK:
         joint_to_actuator_fn: JointToActuatorFn,
         ik_position_only: bool,
         source_q_start_idx: int,
+        hand_orientation_cost_default: float = 10.0,
+        hand_orientation_cost_position_only: float = 0.0,
+        site_orientation_cost_overrides: dict[str, float] | None = None,
         enable_self_collision_avoidance: bool = False,
         is_toddlerbot: bool = False,
     ) -> None:
@@ -102,6 +105,14 @@ class MinkIK:
         self.joint_to_actuator_fn = joint_to_actuator_fn
         self.ik_position_only = bool(ik_position_only)
         self.source_q_start_idx = int(source_q_start_idx)
+        self.hand_orientation_cost_default = float(hand_orientation_cost_default)
+        self.hand_orientation_cost_position_only = float(
+            hand_orientation_cost_position_only
+        )
+        self.site_orientation_cost_overrides = {
+            str(name): float(cost)
+            for name, cost in (site_orientation_cost_overrides or {}).items()
+        }
 
         self.config = mink.Configuration(model)
         try:
@@ -152,11 +163,19 @@ class MinkIK:
             self.tasks["posture"] = posture_task
 
             for site_name in self.site_names:
+                orientation_cost = (
+                    self.hand_orientation_cost_position_only
+                    if self.ik_position_only
+                    else self.hand_orientation_cost_default
+                )
+                orientation_cost = self.site_orientation_cost_overrides.get(
+                    site_name, orientation_cost
+                )
                 frame_task = mink.FrameTask(
                     frame_name=site_name,
                     frame_type="site",
                     position_cost=10.0,
-                    orientation_cost=0.0 if self.ik_position_only else 10.0,
+                    orientation_cost=orientation_cost,
                     lm_damping=1.0,
                 )
                 self.tasks[site_name] = frame_task

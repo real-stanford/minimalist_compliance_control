@@ -126,13 +126,11 @@ OBJECT_MASS_MAP = {
     },
     "cylinder_short": {
         "mass": 0.1,
-        "init_pos": np.array([-0.13, -0.08, 0.15], dtype=np.float32),
+        "init_pos": np.array([-0.13, -0.08, 0.145], dtype=np.float32),
         "init_quat": np.array([0.70710677, 0.70710677, 0.0, 0.0], dtype=np.float32),
         "min_normal_force_rotation": 8.0,
         "min_normal_force_translation": 5.0,
-        "geom_size": np.array(
-            [0.0325, 0.0605], dtype=np.float32
-        ),  # [radius, half_height]
+        "geom_size": np.array([0.04, 0.12], dtype=np.float32),  # [radius, half_height]
     },
     "pen": {
         "mass": 0.05,
@@ -206,7 +204,7 @@ TARGET_POSE_DATA: Dict[str, Dict[str, np.ndarray]] = {
 OBJECT_INIT_POS_MAP = {
     "sphere": np.array([-0.125, -0.08, 0.145], dtype=np.float32),
     "box": np.array([-0.125, -0.08, 0.15], dtype=np.float32),
-    "cylinder_short": np.array([-0.125, -0.075, 0.15], dtype=np.float32),
+    "cylinder_short": np.array([-0.125, -0.075, 0.16], dtype=np.float32),
 }
 
 OBJECT_TYPE = "cylinder_short"
@@ -373,6 +371,10 @@ def _leap_init(
     policy.mode_switch_pending = False
     policy.target_mode: Optional[str] = None
     policy.return_to_zero_tolerance = 0.003
+    # Hold still briefly after close->rotate contact trigger.
+    policy.rotate_start_wait = 0.5
+    policy.rotate_phase_start_time: Optional[float] = None
+    policy.rotate_wait_released = False
 
     # Stdin receiver for keyboard control.
     policy.control_receiver: Optional[KeyboardControlReceiver] = None
@@ -524,12 +526,7 @@ def _leap_build_command_trajectory(
         key_rots = R.from_rotvec(np.stack([rot_start, rot_target], axis=0))
         slerp = Slerp([0.0, 1.0], key_rots)
         interp_rots = slerp(weights)
-        interp_rotvecs = interp_rots.as_rotvec().astype(np.float32)
-        # Keep rotvec sign continuous across samples to avoid apparent jumps near pi.
-        for sample_idx in range(1, interp_rotvecs.shape[0]):
-            if np.dot(interp_rotvecs[sample_idx - 1], interp_rotvecs[sample_idx]) < 0:
-                interp_rotvecs[sample_idx] = -interp_rotvecs[sample_idx]
-        ori_interp[:, idx] = interp_rotvecs
+        ori_interp[:, idx] = interp_rots.as_rotvec().astype(np.float32)
 
     def blend(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         w = weights.reshape((-1,) + (1,) * a.ndim)
@@ -721,6 +718,26 @@ def _leap_update_goal(policy, time_curr: float) -> None:
     # Calculate dt for integration
     dt = time_curr - policy.last_integration_time
     policy.last_integration_time = time_curr
+
+    # Dwell after close->rotate contact trigger: zero commanded motion for a short window.
+    if not bool(getattr(policy, "rotate_wait_released", True)):
+        start_time = getattr(policy, "rotate_phase_start_time", None)
+        wait_duration = float(max(getattr(policy, "rotate_start_wait", 0.0), 0.0))
+        if start_time is not None and (time_curr - float(start_time)) < wait_duration:
+            policy.target_rotation_angvel = np.array([0.0, 0.0, 0.0])
+            policy.target_rotation_linvel = np.array([0.0, 0.0, 0.0])
+            return
+        policy.rotate_wait_released = True
+        if policy.control_mode == "rotation":
+            policy.target_rotation_angvel = np.array(
+                [0.0, 0.0, policy.rotation_angvel_magnitude]
+            )
+            policy.target_rotation_linvel = np.array([0.0, 0.0, 0.0])
+        else:
+            policy.target_rotation_linvel = np.array(
+                [policy.translation_linvel_magnitude, 0.0, 0.0]
+            )
+            policy.target_rotation_angvel = np.array([0.0, 0.0, 0.0])
 
     # Integrate velocities to track relative position
     if policy.control_mode == "rotation":
@@ -1026,9 +1043,7 @@ def _leap_step(
                 _leap_start_command_trajectory(policy, policy.forward_traj, time_curr)
                 policy.traj_set = True
             elif policy.active_traj is None:
-                _leap_check_switch_phase(
-                    policy,
-                )
+                _leap_check_switch_phase(policy, time_curr=time_curr)
         _leap_advance_command_trajectory(policy, time_curr)
     elif policy.phase == "rotate":
         # Update goal with keyboard commands and threshold checking
@@ -1036,9 +1051,7 @@ def _leap_step(
 
         # Handle rotation action
         _leap_handle_rotate_action(policy, system_state)
-        _leap_check_switch_phase(
-            policy,
-        )
+        _leap_check_switch_phase(policy, time_curr=time_curr)
 
     if (
         policy.phase == "close"
@@ -1132,7 +1145,7 @@ def _leap_set_phase(policy, phase: str) -> None:
         policy.traj_set = False
 
 
-def _leap_check_switch_phase(policy) -> None:
+def _leap_check_switch_phase(policy, time_curr: Optional[float] = None) -> None:
     """Switch from close to rotate once all fingertips have sufficient contact force."""
     if policy.phase == "close":
         has_contact = _leap_check_all_fingertips_contact(
@@ -1145,6 +1158,12 @@ def _leap_check_switch_phase(policy) -> None:
             _leap_capture_baseline_tip_rot(
                 policy,
             )
+            policy.rotate_phase_start_time = float(
+                time_curr if time_curr is not None else policy.wrench_sim.data.time
+            )
+            policy.rotate_wait_released = False
+            policy.target_rotation_linvel = np.array([0.0, 0.0, 0.0])
+            policy.target_rotation_angvel = np.array([0.0, 0.0, 0.0])
             if getattr(policy, "debug_rotate_transition", False):
                 policy.debug_rotate_transition_countdown = int(
                     getattr(policy, "debug_rotate_transition_frames", 40)
@@ -1656,8 +1675,8 @@ def _leap_distribute_action(
         curr_rot = R.from_rotvec(old_rotvec)
         new_rot = if_mf_rot_increment * curr_rot
         new_rotvec = new_rot.as_rotvec().astype(np.float32)
-        # Ensure rotvec continuity to avoid sudden sign flips at pi boundary.
-        new_rotvec = _leap_ensure_rotvec_continuity(policy, old_rotvec, new_rotvec)
+        # Ensure sign continuity to avoid jumps
+        # new_rotvec = _leap_ensure_rotvec_continuity(policy, old_rotvec, new_rotvec)
         policy.pose_command[tip_idx, 3:6] = new_rotvec
 
     # set the thumb linvel and angvel
@@ -1672,12 +1691,12 @@ def _leap_distribute_action(
     # print(policy.target_rotation_angvel)
     new_rot = rot_increment * curr_rot
     new_rotvec_thumb = new_rot.as_rotvec().astype(np.float32)
-    # Ensure rotvec continuity to avoid sudden sign flips at pi boundary.
-    new_rotvec_thumb = _leap_ensure_rotvec_continuity(
-        policy,
-        old_rotvec_thumb,
-        new_rotvec_thumb,
-    )
+    # Ensure sign continuity to avoid jumps
+    # new_rotvec_thumb = _leap_ensure_rotvec_continuity(
+    #     policy,
+    #     old_rotvec_thumb,
+    #     new_rotvec_thumb,
+    # )
     # print(new_rotvec_thumb)
 
     # integrated_angle = R.from_rotvec(policy.integrated_angle_thumb)

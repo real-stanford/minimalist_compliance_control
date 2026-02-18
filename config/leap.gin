@@ -51,6 +51,13 @@ ComplianceRefConfig.mink_damping = 0.1
 ComplianceRefConfig.actuator_indices = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
 ComplianceRefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 ComplianceRefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+MinkIK.hand_orientation_cost_default = 10.0
+MinkIK.hand_orientation_cost_position_only = 0.0
+MinkIK.site_orientation_cost_overrides = {
+    "if_tip": 0.2,
+    "mf_tip": 0.2,
+    "th_tip": 0.5,
+}
 
 # Runner config
 RunnerConfig.kp_pos = 100.0
