@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 import numpy as np
 import zmq
 
-from toddlerbot.utils.comm_utils import ZMQNode
+from vlm.utils.comm_utils import ZMQNode
 
 T = TypeVar("T")
 

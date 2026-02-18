@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from sam3.model.sam3_image_processor import Sam3Processor
 from sam3.model_builder import build_sam3_image_model
 
-from toddlerbot.servers.foundation_model_server import (
+from vlm.servers.foundation_model_server import (
     FoundationModelServer,
     ensure_image_array,
 )

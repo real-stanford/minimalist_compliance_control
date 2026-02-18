@@ -377,8 +377,8 @@ class ComplianceVLMPolicy:
                     print(
                         "[ComplianceVLM] camera_left_device/camera_right_device are ignored with real_world.camera.Camera."
                     )
-                self.left_camera = Camera("left")
-                self.right_camera = Camera("right")
+                self.left_camera = Camera("left", robot=self.robot_name)
+                self.right_camera = Camera("right", robot=self.robot_name)
             except Exception as exc:
                 self.left_camera = None
                 self.right_camera = None

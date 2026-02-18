@@ -13,40 +13,74 @@ import cv2
 import numpy as np
 import yaml
 
-CAMERA_CONFIG_PATH = Path(
-    os.environ.get(
-        "MCC_CAMERA_CONFIG",
-        str(Path(__file__).resolve().with_name("camera.yml")),
-    )
-)
-CALIBRATION_PATH = Path(
-    os.environ.get(
-        "MCC_CAMERA_CALIB",
-        str(Path(__file__).resolve().with_name("calibration.pkl")),
-    )
-)
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_ASSETS_DIR = _REPO_ROOT / "assets"
+_LEGACY_CAMERA_CONFIG_PATH = Path(__file__).resolve().with_name("camera.yml")
+_LEGACY_CALIBRATION_PATH = Path(__file__).resolve().with_name("calibration.pkl")
 
 
-def load_camera_params() -> dict:
-    if not CAMERA_CONFIG_PATH.exists():
-        print(
-            f"Camera config not found: {CAMERA_CONFIG_PATH} (using device defaults)",
-            file=sys.stderr,
-        )
+def normalize_robot_name(robot: str) -> str:
+    """Map broad robot names to camera config keys."""
+    name = str(robot).strip().lower()
+    if "leap" in name:
+        return "leap"
+    if "toddlerbot" in name:
+        return "toddlerbot"
+    return name
+
+
+def resolve_camera_config_path(
+    robot: str, config_override: Optional[str] = None
+) -> Path:
+    if config_override:
+        return Path(config_override)
+    return _ASSETS_DIR / f"{normalize_robot_name(robot)}_camera.yml"
+
+
+def load_robot_camera_config(
+    robot: str, config_override: Optional[str] = None
+) -> tuple[dict, Path]:
+    config_path = resolve_camera_config_path(robot, config_override=config_override)
+    if not config_path.exists():
+        if _LEGACY_CAMERA_CONFIG_PATH.exists():
+            print(
+                f"Camera config not found: {config_path}. "
+                f"Falling back to legacy config: {_LEGACY_CAMERA_CONFIG_PATH}",
+                file=sys.stderr,
+            )
+            config_path = _LEGACY_CAMERA_CONFIG_PATH
+        else:
+            print(
+                f"Camera config not found: {config_path} (using device defaults)",
+                file=sys.stderr,
+            )
+            return {}, config_path
+
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Camera config must be a mapping: {config_path}")
+    return data, config_path
+
+
+def load_camera_params(robot: str) -> dict:
+    data, config_path = load_robot_camera_config(
+        robot, config_override=os.environ.get("MCC_CAMERA_CONFIG")
+    )
+    if not data:
         return {}
 
-    data = yaml.safe_load(CAMERA_CONFIG_PATH.read_text(encoding="utf-8")) or {}
-    if not isinstance(data, dict):
-        raise ValueError(f"Camera config must be a mapping: {CAMERA_CONFIG_PATH}")
+    controls_data = data.get("camera_controls", data)
+    if not isinstance(controls_data, dict):
+        raise ValueError(f"camera_controls must be a mapping: {config_path}")
 
     params: dict = {}
     for side in ("left", "right"):
-        if side not in data:
+        if side not in controls_data:
             continue
-        side_cfg = data.get(side, {})
+        side_cfg = controls_data.get(side, {})
         if not isinstance(side_cfg, dict):
             raise ValueError(
-                f"Camera config missing mapping for '{side}' in {CAMERA_CONFIG_PATH}"
+                f"Camera config missing mapping for '{side}' in {config_path}"
             )
         brightness = side_cfg.get("brightness")
         contrast = side_cfg.get("contrast")
@@ -73,15 +107,34 @@ def load_camera_params() -> dict:
     return params
 
 
-CAMERA_PARAMS = load_camera_params()
-LEFT_CAMERA_BRIGHTNESS = CAMERA_PARAMS.get("left", {}).get("brightness")
-LEFT_CAMERA_CONTRAST = CAMERA_PARAMS.get("left", {}).get("contrast")
-RIGHT_CAMERA_BRIGHTNESS = CAMERA_PARAMS.get("right", {}).get("brightness")
-RIGHT_CAMERA_CONTRAST = CAMERA_PARAMS.get("right", {}).get("contrast")
-LEFT_CAMERA_SATURATION = CAMERA_PARAMS.get("left", {}).get("saturation")
-LEFT_CAMERA_HUE = CAMERA_PARAMS.get("left", {}).get("hue")
-RIGHT_CAMERA_SATURATION = CAMERA_PARAMS.get("right", {}).get("saturation")
-RIGHT_CAMERA_HUE = CAMERA_PARAMS.get("right", {}).get("hue")
+def load_intrinsics_from_config(robot: str, side: str) -> np.ndarray:
+    data, config_path = load_robot_camera_config(
+        robot, config_override=os.environ.get("MCC_CAMERA_CONFIG")
+    )
+    calibration = data.get("calibration", {})
+    matrix_key = "K1" if side == "left" else "K2"
+    if isinstance(calibration, dict) and matrix_key in calibration:
+        intrinsics = np.asarray(calibration[matrix_key], dtype=np.float32)
+        if intrinsics.shape != (3, 3):
+            raise ValueError(
+                f"Calibration matrix {matrix_key} must be 3x3 in {config_path}"
+            )
+        return intrinsics
+
+    calibration_path = Path(
+        os.environ.get("MCC_CAMERA_CALIB", str(_LEGACY_CALIBRATION_PATH))
+    )
+    if calibration_path.exists():
+        with open(calibration_path, "rb") as f:
+            calib_params = pickle.load(f)
+        legacy_intrinsics = np.asarray(
+            calib_params["K1"] if side == "left" else calib_params["K2"],
+            dtype=np.float32,
+        )
+        if legacy_intrinsics.shape == (3, 3):
+            return legacy_intrinsics
+
+    return np.eye(3, dtype=np.float32)
 
 
 class Camera:
@@ -92,7 +145,14 @@ class Camera:
     claimed_device_paths: set[str] = set()
     device_control_cache: dict[int, Optional[Set[str]]] = {}
 
-    def __init__(self, side, width=640, height=480, fps=30):
+    def __init__(
+        self,
+        side,
+        width=640,
+        height=480,
+        fps=30,
+        robot: Optional[str] = None,
+    ):
         """Initializes the camera setup for either the left or right side and configures capture settings.
 
         Args:
@@ -100,11 +160,16 @@ class Camera:
             width (int, optional): The width of the video capture frame. Defaults to 640.
             height (int, optional): The height of the video capture frame. Defaults to 480.
             fps (int | None, optional): Target frames per second. Defaults to 20.
+            robot (str | None, optional): Robot name used to select
+                `assets/<robot>_camera.yml`. Defaults to `MCC_ROBOT` or `toddlerbot`.
 
         Raises:
             Exception: If the camera cannot be opened.
         """
         self.side = side
+        self.robot = normalize_robot_name(
+            robot or os.environ.get("MCC_ROBOT", "toddlerbot")
+        )
 
         self.camera_id = None
         self.camera_path = None
@@ -114,16 +179,12 @@ class Camera:
         self.height = height
         self.fps = fps
 
-        self.brightness = (
-            LEFT_CAMERA_BRIGHTNESS if side == "left" else RIGHT_CAMERA_BRIGHTNESS
-        )
-        self.contrast = (
-            LEFT_CAMERA_CONTRAST if side == "left" else RIGHT_CAMERA_CONTRAST
-        )
-        self.saturation = (
-            LEFT_CAMERA_SATURATION if side == "left" else RIGHT_CAMERA_SATURATION
-        )
-        self.hue = LEFT_CAMERA_HUE if side == "left" else RIGHT_CAMERA_HUE
+        camera_params = load_camera_params(self.robot)
+        side_params = camera_params.get(side, {})
+        self.brightness = side_params.get("brightness")
+        self.contrast = side_params.get("contrast")
+        self.saturation = side_params.get("saturation")
+        self.hue = side_params.get("hue")
 
         # Fall back to device defaults if config is missing.
         if self.brightness is None:
@@ -150,15 +211,7 @@ class Camera:
 
         self.apply_camera_controls(include_optional=True)
         self._open_capture()
-
-        if CALIBRATION_PATH.exists():
-            with open(CALIBRATION_PATH, "rb") as f:
-                calib_params = pickle.load(f)
-                self.intrinsics = (
-                    calib_params["K1"] if side == "left" else calib_params["K2"]
-                )
-        else:
-            self.intrinsics = np.eye(3, dtype=np.float32)
+        self.intrinsics = load_intrinsics_from_config(self.robot, side)
 
         # Transformation from right camera to left camera
         self.eye_transform = (

@@ -8,11 +8,11 @@ from typing import Any, Dict, Optional
 import cv2
 import numpy as np
 
-from toddlerbot.depth.depth_estimator_foundation_stereo import (
+from vlm.depth.depth_estimator_foundation_stereo import (
     DepthEstimatorFoundationStereo,
     DepthResult,
 )
-from toddlerbot.servers.foundation_model_server import (
+from vlm.servers.foundation_model_server import (
     FoundationModelServer,
     ensure_image_array,
 )

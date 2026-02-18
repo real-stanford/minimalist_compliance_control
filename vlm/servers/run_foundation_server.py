@@ -8,8 +8,8 @@ import multiprocessing as mp
 import signal
 import sys
 
-from toddlerbot.servers.foundation_stereo_server import FoundationStereoServer
-from toddlerbot.servers.sam3_server import SAM3Server
+from vlm.servers.foundation_stereo_server import FoundationStereoServer
+from vlm.servers.sam3_server import SAM3Server
 
 # Default ZeroMQ configuration
 DEFAULT_RESPONSE_IP = "192.168.0.237"

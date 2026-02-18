@@ -34,6 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 examples = [
   "adafruit-circuitpython-bno08x",
+  "matplotlib",
   "opencv-python",
   "pyyaml",
   "pyserial",
