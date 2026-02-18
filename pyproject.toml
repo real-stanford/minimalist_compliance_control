@@ -50,6 +50,7 @@ examples = [
   "moviepy",
   "qpsolvers[osqp]",
   "sympy",
+  "gdown",
 ]
 
 [project.scripts]

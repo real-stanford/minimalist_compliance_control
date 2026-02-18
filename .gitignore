@@ -15,4 +15,5 @@ pip-wheel-metadata/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+ckpts/
 results/

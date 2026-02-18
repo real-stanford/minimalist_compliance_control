@@ -8,10 +8,7 @@ from typing import Any, Dict, Optional
 import cv2
 import numpy as np
 
-from vlm.depth.depth_estimator_foundation_stereo import (
-    DepthEstimatorFoundationStereo,
-    DepthResult,
-)
+from vlm.depth.foundation_stereo import DepthEstimator, DepthResult
 from vlm.servers.foundation_model_server import (
     FoundationModelServer,
     ensure_image_array,
@@ -31,7 +28,7 @@ class FoundationStereoServer(FoundationModelServer):
         response_port: int,
         loop_rate_hz: float = 50.0,
         queue_len: int = 1,
-        engine_path: str = "toddlerbot/depth/models/foundation_stereo.engine",
+        engine_path: str = "ckpts/foundation_stereo_vitl_480x640_20.engine",
     ) -> None:
         super().__init__(
             response_ip=response_ip,
@@ -41,7 +38,7 @@ class FoundationStereoServer(FoundationModelServer):
             queue_len=queue_len,
         )
 
-        self.depth_estimator = DepthEstimatorFoundationStereo(engine_path=engine_path)
+        self.depth_estimator = DepthEstimator(engine_path=engine_path)
 
     def handle_request(
         self, data: Dict[str, Any], config: Dict[str, Any]
@@ -62,13 +59,13 @@ class FoundationStereoServer(FoundationModelServer):
                 "Missing calibration config. Provide 'calibration' with "
                 "calib_params, rec_params, calib_width, calib_height."
             )
-        calib_params = calib_cfg.get("calib_params")
-        rec_params = calib_cfg.get("rec_params")
+        calib_params_raw = calib_cfg.get("calib_params")
+        rec_params_raw = calib_cfg.get("rec_params")
         calib_width = calib_cfg.get("calib_width")
         calib_height = calib_cfg.get("calib_height")
         if (
-            calib_params is None
-            or rec_params is None
+            calib_params_raw is None
+            or rec_params_raw is None
             or calib_width is None
             or calib_height is None
         ):
@@ -76,7 +73,10 @@ class FoundationStereoServer(FoundationModelServer):
                 "Calibration config requires calib_params, rec_params, calib_width, calib_height."
             )
 
-        calibration = DepthEstimatorFoundationStereo.compute_calibration(
+        calib_params = self.ensure_matrix_dict(calib_params_raw, "calib_params")
+        rec_params = self.ensure_matrix_dict(rec_params_raw, "rec_params")
+
+        calibration = DepthEstimator.compute_calibration(
             calib_params=calib_params,
             rec_params=rec_params,
             calib_width=int(calib_width),
@@ -87,7 +87,9 @@ class FoundationStereoServer(FoundationModelServer):
 
         remove_invisible = bool(config.get("remove_invisible", True))
         return_all = bool(config.get("return_all", True))
-        skip_rectify = bool(config.get("skip_rectify", False))
+        skip_rectify = bool(config.get("skip_rectify", False)) or bool(
+            config.get("pre_rectified", False)
+        )
 
         self.log(
             "Foundation Stereo: executing depth estimation "
@@ -104,6 +106,18 @@ class FoundationStereoServer(FoundationModelServer):
         )
 
         return self.depth_result_to_dict(depth_result)
+
+    def ensure_matrix_dict(self, value: Any, field_name: str) -> Dict[str, np.ndarray]:
+        """Ensure calibration/rectification payload is a dict of numpy arrays."""
+        if not isinstance(value, dict):
+            raise ValueError(f"'{field_name}' must be a dictionary.")
+        normalized: Dict[str, np.ndarray] = {}
+        for key, item in value.items():
+            if isinstance(item, np.ndarray):
+                normalized[key] = item
+            else:
+                normalized[key] = np.asarray(item, dtype=np.float64)
+        return normalized
 
     def load_image(self, data: Dict[str, Any], key: str) -> Optional[np.ndarray]:
         """Decode an image provided inline or by path."""
