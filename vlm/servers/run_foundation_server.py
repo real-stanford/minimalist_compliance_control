@@ -12,7 +12,7 @@ from vlm.servers.foundation_stereo_server import FoundationStereoServer
 from vlm.servers.sam3_server import SAM3Server
 
 # Default ZeroMQ configuration
-DEFAULT_RESPONSE_IP = "192.168.0.237"
+DEFAULT_RESPONSE_IP = "127.0.0.1"
 QUEUE_LEN = 1
 
 FS_REQUEST_PORT = 5555

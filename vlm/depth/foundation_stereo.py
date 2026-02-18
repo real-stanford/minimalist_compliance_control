@@ -51,7 +51,8 @@ def _preprocess_image(
 ) -> np.ndarray:
     if image.shape[0] != target_height or image.shape[1] != target_width:
         image = cv2.resize(image, (target_width, target_height))
-    return np.transpose(image.astype(np.float32), (2, 0, 1))[None, ...]
+    chw = np.transpose(image.astype(np.float32), (2, 0, 1))
+    return np.ascontiguousarray(chw[None, ...], dtype=np.float32)
 
 
 def _get_onnx_model(model_path: str) -> Any:
@@ -221,8 +222,12 @@ class DepthEstimator:
 
     def _infer(self, left_img: np.ndarray, right_img: np.ndarray) -> np.ndarray:
         """Run model inference and return disparity."""
-        left_tensor = _preprocess_image(left_img, self.height, self.width)
-        right_tensor = _preprocess_image(right_img, self.height, self.width)
+        left_tensor = np.ascontiguousarray(
+            _preprocess_image(left_img, self.height, self.width), dtype=np.float32
+        )
+        right_tensor = np.ascontiguousarray(
+            _preprocess_image(right_img, self.height, self.width), dtype=np.float32
+        )
 
         if torch is not None and torch.cuda.is_available():
             torch.cuda.synchronize()

@@ -41,6 +41,26 @@ mcc-run-policy --policy compliance_dp --robot toddlerbot -- --help
 mcc-run-policy --policy compliance_vlm --robot toddlerbot -- --help
 ```
 
+## Foundation Stereo Engine
+
+The foundation stereo server requires the TensorRT engine file at:
+
+- `ckpts/foundation_stereo_vitl_480x640_20.engine`
+
+Download it with:
+
+```bash
+mkdir -p ckpts
+cd ckpts
+gdown --fuzzy "https://drive.google.com/file/d/1fHppa6f15CLT8LnDXHmoAMfA2hoUsDrC/view?usp=drive_link"
+```
+
+## SAM3 Setup
+
+For SAM3 installation, follow the official instructions from:
+
+- https://github.com/facebookresearch/sam3
+
 ## Core Modules
 
 - `minimalist_compliance_control/wrench_sim.py`
