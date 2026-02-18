@@ -54,6 +54,7 @@ class ComplianceRefConfig:
     joint_to_actuator_scale: Optional[Sequence[float]] = None
     joint_to_actuator_bias: Optional[Sequence[float]] = None
     fixed_model_xml_path: Optional[str] = None
+    avoid_self_collision: Optional[bool] = None
 
 
 @gin.configurable
@@ -220,6 +221,7 @@ class ComplianceController:
             inertia_diag=np.asarray(cfg.inertia_diag, dtype=np.float32),
             mink_num_iter=int(cfg.mink_num_iter),
             mink_damping=float(cfg.mink_damping),
+            avoid_self_collision=bool(cfg.avoid_self_collision),
         )
         self._last_state = self.compliance_ref.get_default_state()
         self._default_motor_pos = default_motor_pos

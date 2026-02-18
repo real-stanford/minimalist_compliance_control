@@ -22,6 +22,9 @@ class BaseSim(Protocol):
     model: mujoco.MjModel
     data: mujoco.MjData
 
+    def set_motor_target(self, motor_target: npt.NDArray[np.float32]) -> None:
+        """Set motor target for the next backend step."""
+
     def step(self) -> None:
         """Advance one backend step."""
 
@@ -135,6 +138,14 @@ class MuJoCoSim:
             if self.substep_control is not None:
                 self.substep_control(self.data)
             mujoco.mj_step(self.model, self.data)
+
+    def set_motor_target(self, motor_target: npt.NDArray[np.float32]) -> None:
+        target = np.asarray(motor_target, dtype=np.float32).reshape(-1)
+        if target.shape[0] != self.model.nu:
+            raise ValueError(
+                f"motor_target shape {target.shape[0]} must equal model.nu {self.model.nu}"
+            )
+        self.data.ctrl[:] = target
 
     def get_observation(self) -> dict[str, Any]:
         return {

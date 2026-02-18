@@ -1,13 +1,3 @@
-"""Standalone VLM compliance example modules."""
+"""VLM package."""
 
-from .compliance_vlm import (
-    ComplianceVLMInput,
-    ComplianceVLMOutput,
-    StandaloneComplianceVLM,
-)
-
-__all__ = [
-    "ComplianceVLMInput",
-    "ComplianceVLMOutput",
-    "StandaloneComplianceVLM",
-]
+__all__: list[str] = []

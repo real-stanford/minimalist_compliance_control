@@ -1,7 +1,9 @@
+import os
 import select
 import sys
 import termios
 import threading
+import time
 import tty
 import warnings
 from dataclasses import dataclass
@@ -19,6 +21,7 @@ AXIS_BINDINGS = {
     "q": (2, +1),
     "z": (2, -1),
 }
+VALID_KEYBOARD_COMMANDS = {"c", "l", "r", "b"}
 
 
 @dataclass
@@ -181,6 +184,86 @@ class KeyboardListener:
                 pass
         self._fd = None
         self._old_term_settings = None
+
+
+@dataclass
+class KeyboardCommand:
+    command: str
+    recv_time: float
+
+
+class KeyboardControlReceiver:
+    """Non-blocking stdin receiver for single-char keyboard commands."""
+
+    def __init__(self, port: int = 5592) -> None:
+        _ = port
+        self.enabled = False
+        self._fd: Optional[int] = None
+        self._old_term_settings = None
+
+        if not sys.stdin.isatty():
+            warnings.warn(
+                "Model-based keyboard control disabled: stdin is not a TTY.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+        try:
+            self._fd = sys.stdin.fileno()
+            self._old_term_settings = termios.tcgetattr(self._fd)
+            tty.setcbreak(self._fd)
+        except Exception as exc:
+            warnings.warn(
+                f"Model-based keyboard control disabled: failed to configure stdin ({exc}).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            self._fd = None
+            self._old_term_settings = None
+            return
+
+        self.enabled = True
+        print("[model_based] Keyboard control active on stdin (c/l/r/b).")
+        print("[model_based] Focus terminal to send model-based commands.")
+
+    def close(self) -> None:
+        if self._fd is not None and self._old_term_settings is not None:
+            try:
+                termios.tcsetattr(
+                    self._fd,
+                    termios.TCSADRAIN,
+                    self._old_term_settings,
+                )
+            except Exception:
+                pass
+        self._fd = None
+        self._old_term_settings = None
+        self.enabled = False
+
+    def poll_command(self) -> Optional[KeyboardCommand]:
+        if not self.enabled or self._fd is None:
+            return None
+        try:
+            ready, _, _ = select.select([self._fd], [], [], 0.0)
+        except Exception:
+            return None
+        if not ready:
+            return None
+        try:
+            raw = os.read(self._fd, 32)
+        except Exception:
+            return None
+        if not raw:
+            return None
+
+        cmd: Optional[str] = None
+        for ch in raw.decode(errors="ignore").lower():
+            c = ch.strip()
+            if c in VALID_KEYBOARD_COMMANDS:
+                cmd = c
+        if cmd is None:
+            return None
+        return KeyboardCommand(command=cmd, recv_time=time.time())
 
 
 def deep_update(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:

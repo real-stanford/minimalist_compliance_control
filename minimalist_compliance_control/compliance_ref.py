@@ -65,6 +65,7 @@ class ComplianceReference:
         inertia_diag: npt.NDArray[np.float32],
         mink_num_iter: int,
         mink_damping: float,
+        avoid_self_collision: bool = False,
     ) -> None:
         del data
 
@@ -79,6 +80,12 @@ class ComplianceReference:
         self.site_names = list(site_names)
         if not self.site_names:
             raise ValueError("site_names must be provided.")
+        site_set = set(self.site_names)
+        model_hint = (fixed_model_xml_path or "").lower()
+        self.is_toddlerbot = ("toddlerbot" in model_hint) or {
+            "left_hand_center",
+            "right_hand_center",
+        }.issubset(site_set)
 
         self.actuator_indices = np.asarray(actuator_indices, dtype=np.int32)
         self.joint_indices = np.asarray(joint_indices, dtype=np.int32)
@@ -119,6 +126,8 @@ class ComplianceReference:
             joint_to_actuator_fn=self.joint_to_actuator_fn,
             ik_position_only=self.ik_position_only,
             source_q_start_idx=self.q_start_idx,
+            enable_self_collision_avoidance=bool(avoid_self_collision),
+            is_toddlerbot=bool(self.is_toddlerbot),
         )
 
         default_state = self.get_default_state()

@@ -28,7 +28,7 @@ Place depth calibration files in `vlm/depth/params/`:
 Replay mode:
 
 ```bash
-python examples/run_compliance_vlm.py \
+python examples/run_policy.py --policy compliance_vlm --robot toddlerbot -- \
   --robot-name toddlerbot_2xm \
   --mode drawing \
   --object "star" \
@@ -39,7 +39,7 @@ python examples/run_compliance_vlm.py \
 Dummy mode:
 
 ```bash
-python examples/run_compliance_vlm.py \
+python examples/run_policy.py --policy compliance_vlm --robot toddlerbot -- \
   --robot-name toddlerbot_2xm \
   --mode waiting
 ```

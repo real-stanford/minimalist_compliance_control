@@ -1,78 +1,79 @@
-"""Self-contained compliance_dp core adapted from toddlerbot_internal.
-
-This module keeps the compliance_dp inference behavior (windowed obs/image,
-async diffusion inference, timestamped action selection/interpolation) while
-removing toddlerbot runtime dependencies.
-"""
-
 from __future__ import annotations
 
+import argparse
 import multiprocessing as mp
+import os
 import queue
 import time
 from collections import deque
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import cv2
+import gin
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 
+from diffusion_policy.dp_model import DPModel
 from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT
-
-from .dp_model import DPModel
-
-
-@dataclass(frozen=True)
-class DPConfig:
-    """Runtime config mirrored from DP model."""
-
-    use_ddpm: bool
-    diffuse_steps: int
-    action_horizon: int
-    obs_horizon: int
-    image_horizon: int
-    lowdim_obs_dim: int
-    input_channels: int
-    obs_source: Optional[List[str]]
-    action_source: Optional[List[str]]
-
-    @classmethod
-    def from_model(cls, model: DPModel) -> "DPConfig":
-        return cls(
-            use_ddpm=bool(model.use_ddpm),
-            diffuse_steps=int(model.diffuse_steps),
-            action_horizon=int(model.action_horizon),
-            obs_horizon=int(model.obs_horizon),
-            image_horizon=int(model.image_horizon),
-            lowdim_obs_dim=int(model.lowdim_obs_dim),
-            input_channels=int(model.input_channels),
-            obs_source=model.obs_source,
-            action_source=model.action_source,
-        )
+from minimalist_compliance_control.controller import (
+    ComplianceController,
+    ComplianceRefConfig,
+    ControllerConfig,
+)
+from minimalist_compliance_control.wrench_estimation import WrenchEstimateConfig
 
 
-@dataclass
-class ComplianceDPInput:
-    """Input bundle required per control tick."""
-
-    time: float
-    image: Optional[npt.NDArray[np.uint8]]
-    x_obs: Optional[npt.NDArray[np.float32]] = None
-    x_wrench: Optional[npt.NDArray[np.float32]] = None
-    motor_pos: Optional[npt.NDArray[np.float32]] = None
+@gin.configurable
+def get_motor_config_paths(
+    default_config_path: Optional[str] = None,
+    robot_config_path: Optional[str] = None,
+    motors_config_path: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    return default_config_path, robot_config_path, motors_config_path
 
 
-@dataclass
-class ComplianceDPOutput:
-    """Output bundle from compliance DP step."""
+def _to_hwc_u8(image: np.ndarray, *, size_hw: tuple[int, int]) -> np.ndarray:
+    arr = np.asarray(image)
+    if arr.ndim != 3:
+        arr = np.zeros((size_hw[0], size_hw[1], 3), dtype=np.uint8)
+    if arr.shape[0] in (1, 3) and arr.shape[2] not in (1, 3):
+        arr = np.transpose(arr, (1, 2, 0))
+    if arr.shape[2] == 1:
+        arr = np.repeat(arr, 3, axis=2)
+    if arr.dtype != np.uint8:
+        max_v = float(arr.max()) if arr.size else 0.0
+        if max_v <= 1.0:
+            arr = arr * 255.0
+        arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
+    return arr
 
-    status: str
-    pose_command: npt.NDArray[np.float32]
-    command_matrix: npt.NDArray[np.float32]
-    raw_action: Optional[npt.NDArray[np.float32]] = None
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Compliance DP per-tick policy")
+    parser.add_argument("--ckpt", type=str, required=True, help="DP checkpoint path")
+    parser.add_argument("--num-sites", type=int, default=0, help="Override site count")
+    parser.add_argument("--dt", type=float, default=0.02, help="Policy control dt")
+    parser.add_argument("--image-height", type=int, default=96)
+    parser.add_argument("--image-width", type=int, default=96)
+    parser.add_argument("--kp-pos", type=float, default=100.0)
+    parser.add_argument("--kp-rot", type=float, default=10.0)
+    return parser
+
+
+def _dp_config_from_model(model: DPModel) -> dict[str, Any]:
+    return {
+        "use_ddpm": bool(model.use_ddpm),
+        "diffuse_steps": int(model.diffuse_steps),
+        "action_horizon": int(model.action_horizon),
+        "obs_horizon": int(model.obs_horizon),
+        "image_horizon": int(model.image_horizon),
+        "lowdim_obs_dim": int(model.lowdim_obs_dim),
+        "input_channels": int(model.input_channels),
+        "obs_source": model.obs_source,
+        "action_source": model.action_source,
+    }
 
 
 def put_latest(queue_obj: mp.Queue, payload) -> None:
@@ -106,7 +107,7 @@ def _run_inference_process(
         diffuse_steps=diffuse_steps,
         action_horizon=action_horizon,
     )
-    put_latest(output_queue, ("config", DPConfig.from_model(dp_model).__dict__))
+    put_latest(output_queue, ("config", _dp_config_from_model(dp_model)))
 
     while not stop_event.is_set():
         try:
@@ -132,14 +133,105 @@ def _run_inference_process(
         )
 
 
-class StandaloneComplianceDP:
-    """Self-contained compliance DP policy core.
-
-    The class outputs pose commands and command matrices compatible with
-    `minimalist_compliance_control` compliance reference layout.
-    """
+class ComplianceDPPolicy:
+    """Per-tick compliance DP policy with (obs, sim) -> (control_inputs, action)."""
 
     def __init__(
+        self,
+        args: argparse.Namespace,
+        *,
+        robot: str,
+        sim: str,
+        vis: bool,
+        plot: bool,
+    ) -> None:
+        del plot
+        self.args = args
+        self.robot = str(robot)
+        self.sim_backend = str(sim)
+        self.vis = bool(vis)
+        self.repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        os.chdir(self.repo_root)
+
+        config_name = "leap.gin" if self.robot == "leap" else "toddlerbot.gin"
+        config_path = os.path.join(self.repo_root, "config", config_name)
+        gin.clear_config()
+        gin.parse_config_file(config_path)
+        gin.bind_parameter(
+            "WrenchSimConfig.view", bool(self.vis and self.sim_backend == "mujoco")
+        )
+        gin.bind_parameter("WrenchSimConfig.render", False)
+
+        self.controller = ComplianceController(
+            config=ControllerConfig(),
+            estimate_config=WrenchEstimateConfig(),
+            ref_config=ComplianceRefConfig(),
+        )
+        if self.controller.compliance_ref is None:
+            raise ValueError("Controller compliance_ref must be configured.")
+        self.model = self.controller.wrench_sim.model
+        self.data = self.controller.wrench_sim.data
+        self.control_dt = float(self.controller.ref_config.dt)
+        self.site_names = tuple(self.controller.config.site_names)
+        self.num_sites = len(self.site_names)
+
+        if int(args.num_sites) > 0 and int(args.num_sites) != self.num_sites:
+            raise ValueError(
+                f"--num-sites={args.num_sites} does not match controller site count {self.num_sites}."
+            )
+
+        default_state = self.controller.compliance_ref.get_default_state()
+        self.target_motor_pos = np.asarray(default_state.motor_pos, dtype=np.float32)
+
+        (
+            default_config_path,
+            robot_config_path,
+            motors_config_path,
+        ) = get_motor_config_paths()
+        if not default_config_path or not robot_config_path:
+            raise ValueError(
+                "get_motor_config_paths.default_config_path and robot_config_path must be configured."
+            )
+        if self.robot == "leap" and not motors_config_path:
+            raise ValueError(
+                "get_motor_config_paths.motors_config_path must be configured for leap."
+            )
+        self.default_config_path = str(default_config_path)
+        self.robot_config_path = str(robot_config_path)
+        self.motors_config_path = (
+            str(motors_config_path) if motors_config_path is not None else None
+        )
+
+        trnid = np.asarray(self.model.actuator_trnid[:, 0], dtype=np.int32)
+        self.qpos_adr = np.asarray(self.model.jnt_qposadr[trnid], dtype=np.int32)
+        self.qvel_adr = np.asarray(self.model.jnt_dofadr[trnid], dtype=np.int32)
+
+        self._init_dp_core(
+            ckpt_path=str(args.ckpt),
+            num_sites=self.num_sites,
+            control_dt=float(args.dt),
+        )
+
+        self.command_matrix = np.zeros(
+            (self.num_sites, COMMAND_LAYOUT.width), dtype=np.float32
+        )
+        kp_pos = float(args.kp_pos)
+        kp_rot = float(args.kp_rot)
+        self.command_matrix[:, COMMAND_LAYOUT.kp_pos] = (
+            np.eye(3, dtype=np.float32) * kp_pos
+        ).reshape(-1)
+        self.command_matrix[:, COMMAND_LAYOUT.kd_pos] = (
+            np.eye(3, dtype=np.float32) * (2.0 * np.sqrt(kp_pos))
+        ).reshape(-1)
+        self.command_matrix[:, COMMAND_LAYOUT.kp_rot] = (
+            np.eye(3, dtype=np.float32) * kp_rot
+        ).reshape(-1)
+        self.command_matrix[:, COMMAND_LAYOUT.kd_rot] = (
+            np.eye(3, dtype=np.float32) * (2.0 * np.sqrt(kp_rot))
+        ).reshape(-1)
+        self._closed = False
+
+    def _init_dp_core(
         self,
         ckpt_path: str,
         num_sites: int,
@@ -200,7 +292,7 @@ class StandaloneComplianceDP:
         self.inference_stop_event = ctx.Event()
         self.inference_process = ctx.Process(
             target=_run_inference_process,
-            name="StandaloneComplianceDPInference",
+            name="ComplianceDPInference",
             daemon=True,
             args=(
                 ckpt_path,
@@ -215,22 +307,24 @@ class StandaloneComplianceDP:
         )
         self.inference_process.start()
 
-        self.dp_model = self._read_config_from_process()
-        self.obs_source = self.dp_model.obs_source
-        self.action_source = self.dp_model.action_source
+        dp_cfg = self._read_config_from_process()
+        self.obs_source = dp_cfg.get("obs_source")
+        self.action_source = dp_cfg.get("action_source")
         self.use_compliance = not (
             self.action_source is not None and "x_ref" in self.action_source
         )
 
-        self.expected_channels = int(self.dp_model.input_channels)
-        self.action_max_age_s = self.action_dt * float(self.dp_model.action_horizon + 1)
+        self.expected_channels = int(dp_cfg.get("input_channels", 1))
+        self.lowdim_obs_dim = int(dp_cfg.get("lowdim_obs_dim", 0))
+        self.dp_action_horizon = int(dp_cfg.get("action_horizon", 1))
+        self.action_max_age_s = self.action_dt * float(self.dp_action_horizon + 1)
 
-        self.obs_deque: deque = deque([], maxlen=self.dp_model.obs_horizon)
-        self.image_deque: deque = deque([], maxlen=self.dp_model.image_horizon)
+        self.obs_deque: deque = deque([], maxlen=int(dp_cfg.get("obs_horizon", 1)))
+        self.image_deque: deque = deque([], maxlen=int(dp_cfg.get("image_horizon", 1)))
         self.model_action_seq: List[Tuple[float, npt.NDArray[np.float32]]] = []
         self.action_seq_timestamp = 0.0
 
-    def _read_config_from_process(self, timeout_s: float = 30.0) -> DPConfig:
+    def _read_config_from_process(self, timeout_s: float = 30.0) -> dict[str, Any]:
         deadline = time.monotonic() + float(timeout_s)
         while True:
             remaining = deadline - time.monotonic()
@@ -249,7 +343,7 @@ class StandaloneComplianceDP:
                 and payload[0] == "config"
                 and isinstance(payload[1], dict)
             ):
-                return DPConfig(**payload[1])
+                return dict(payload[1])
 
             if (
                 isinstance(payload, tuple)
@@ -293,35 +387,39 @@ class StandaloneComplianceDP:
             resized /= 255.0
         return resized.transpose(2, 0, 1)
 
-    def _get_obs_vector(self, inp: ComplianceDPInput) -> npt.NDArray[np.float32]:
-        lowdim = int(self.dp_model.lowdim_obs_dim)
+    def _get_obs_vector(
+        self,
+        *,
+        x_obs: Optional[npt.NDArray[np.float32]],
+        x_wrench: Optional[npt.NDArray[np.float32]],
+        motor_pos: Optional[npt.NDArray[np.float32]],
+    ) -> npt.NDArray[np.float32]:
+        lowdim = int(self.lowdim_obs_dim)
 
         if self.obs_source:
             components: List[np.ndarray] = []
             for source in self.obs_source:
                 if source == "x_obs":
-                    if inp.x_obs is None:
+                    if x_obs is None:
                         raise ValueError(
                             "obs_source contains x_obs but x_obs is missing"
                         )
-                    components.append(
-                        np.asarray(inp.x_obs, dtype=np.float32).reshape(-1)
-                    )
+                    components.append(np.asarray(x_obs, dtype=np.float32).reshape(-1))
                 elif source == "x_wrench":
-                    if inp.x_wrench is None:
+                    if x_wrench is None:
                         raise ValueError(
                             "obs_source contains x_wrench but x_wrench is missing"
                         )
                     components.append(
-                        np.asarray(inp.x_wrench, dtype=np.float32).reshape(-1)
+                        np.asarray(x_wrench, dtype=np.float32).reshape(-1)
                     )
                 elif source == "obs_motor_pos":
-                    if inp.motor_pos is None:
+                    if motor_pos is None:
                         raise ValueError(
                             "obs_source contains obs_motor_pos but motor_pos is missing"
                         )
                     components.append(
-                        np.asarray(inp.motor_pos, dtype=np.float32).reshape(-1)
+                        np.asarray(motor_pos, dtype=np.float32).reshape(-1)
                     )
                 else:
                     raise ValueError(f"Unsupported obs_source token: {source}")
@@ -333,13 +431,13 @@ class StandaloneComplianceDP:
             )
             return obs_vec.astype(np.float32)
 
-        if inp.x_obs is not None:
-            x_obs_vec = np.asarray(inp.x_obs, dtype=np.float32).reshape(-1)
+        if x_obs is not None:
+            x_obs_vec = np.asarray(x_obs, dtype=np.float32).reshape(-1)
             if x_obs_vec.size == lowdim:
                 return x_obs_vec
 
-        if inp.motor_pos is not None:
-            motor = np.asarray(inp.motor_pos, dtype=np.float32).reshape(-1)
+        if motor_pos is not None:
+            motor = np.asarray(motor_pos, dtype=np.float32).reshape(-1)
             if motor.size >= lowdim:
                 return motor[:lowdim]
             pad = np.zeros(lowdim - motor.size, dtype=np.float32)
@@ -522,10 +620,21 @@ class StandaloneComplianceDP:
 
         return matrix
 
-    def step(self, inp: ComplianceDPInput) -> ComplianceDPOutput:
-        now = float(inp.time)
-
-        image = self._prepare_image(inp.image)
+    def _step_dp_core(
+        self,
+        *,
+        now: float,
+        image_in: Optional[np.ndarray],
+        x_obs: Optional[npt.NDArray[np.float32]],
+        x_wrench: Optional[npt.NDArray[np.float32]],
+        motor_pos: Optional[npt.NDArray[np.float32]],
+    ) -> tuple[
+        str,
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        Optional[npt.NDArray[np.float32]],
+    ]:
+        image = self._prepare_image(image_in)
         if image is None:
             self.obs_deque.clear()
             self.image_deque.clear()
@@ -533,35 +642,24 @@ class StandaloneComplianceDP:
             self.action_seq_timestamp = 0.0
             self._clear_queue(self.inference_input_queue)
             self._clear_queue(self.inference_output_queue)
-            cmd = self._build_command_matrix(self.pose_command, inp.x_wrench)
-            return ComplianceDPOutput(
-                status="no_image",
-                pose_command=self.pose_command.copy(),
-                command_matrix=cmd,
-                raw_action=None,
-            )
+            cmd = self._build_command_matrix(self.pose_command, x_wrench)
+            return "no_image", self.pose_command.copy(), cmd, None
 
-        obs_vec = self._get_obs_vector(inp)
+        obs_vec = self._get_obs_vector(
+            x_obs=x_obs,
+            x_wrench=x_wrench,
+            motor_pos=motor_pos,
+        )
         self.obs_deque.append(obs_vec)
         self.image_deque.append(image)
 
         if len(self.obs_deque) < self.obs_deque.maxlen:
-            cmd = self._build_command_matrix(self.pose_command, inp.x_wrench)
-            return ComplianceDPOutput(
-                status="warming_up_obs",
-                pose_command=self.pose_command.copy(),
-                command_matrix=cmd,
-                raw_action=None,
-            )
+            cmd = self._build_command_matrix(self.pose_command, x_wrench)
+            return "warming_up_obs", self.pose_command.copy(), cmd, None
 
         if len(self.image_deque) < self.image_deque.maxlen:
-            cmd = self._build_command_matrix(self.pose_command, inp.x_wrench)
-            return ComplianceDPOutput(
-                status="warming_up_image",
-                pose_command=self.pose_command.copy(),
-                command_matrix=cmd,
-                raw_action=None,
-            )
+            cmd = self._build_command_matrix(self.pose_command, x_wrench)
+            return "warming_up_image", self.pose_command.copy(), cmd, None
 
         self._consume_inference_output(now)
         self._submit_inference_request(now)
@@ -573,35 +671,30 @@ class StandaloneComplianceDP:
             self.model_action_seq = []
 
         if not self.model_action_seq:
-            cmd = self._build_command_matrix(self.pose_command, inp.x_wrench)
-            return ComplianceDPOutput(
-                status="waiting_inference",
-                pose_command=self.pose_command.copy(),
-                command_matrix=cmd,
-                raw_action=None,
-            )
+            cmd = self._build_command_matrix(self.pose_command, x_wrench)
+            return "waiting_inference", self.pose_command.copy(), cmd, None
 
         action = self._select_action_for_time(now)
         pose_cmd = self._action_to_pose_command(action)
         if pose_cmd is None:
-            cmd = self._build_command_matrix(self.pose_command, inp.x_wrench)
-            return ComplianceDPOutput(
-                status=f"invalid_action_dim_{np.asarray(action).size}",
-                pose_command=self.pose_command.copy(),
-                command_matrix=cmd,
-                raw_action=np.asarray(action, dtype=np.float32),
+            cmd = self._build_command_matrix(self.pose_command, x_wrench)
+            return (
+                f"invalid_action_dim_{np.asarray(action).size}",
+                self.pose_command.copy(),
+                cmd,
+                np.asarray(action, dtype=np.float32),
             )
 
         self.pose_command = pose_cmd.astype(np.float32)
-        cmd = self._build_command_matrix(self.pose_command, inp.x_wrench)
-        return ComplianceDPOutput(
-            status="ok",
-            pose_command=self.pose_command.copy(),
-            command_matrix=cmd,
-            raw_action=np.asarray(action, dtype=np.float32).reshape(-1),
+        cmd = self._build_command_matrix(self.pose_command, x_wrench)
+        return (
+            "ok",
+            self.pose_command.copy(),
+            cmd,
+            np.asarray(action, dtype=np.float32).reshape(-1),
         )
 
-    def close(self) -> None:
+    def _close_dp_core(self) -> None:
         if hasattr(self, "inference_stop_event"):
             self.inference_stop_event.set()
         if hasattr(self, "inference_process") and self.inference_process.is_alive():
@@ -618,3 +711,89 @@ class StandaloneComplianceDP:
             self._clear_queue(self.inference_output_queue)
             self.inference_output_queue.cancel_join_thread()
             self.inference_output_queue.close()
+
+    @classmethod
+    def from_argv(
+        cls,
+        argv: Sequence[str],
+        *,
+        robot: str,
+        sim: str,
+        vis: bool,
+        plot: bool,
+    ) -> "ComplianceDPPolicy":
+        args = build_parser().parse_args(list(argv))
+        return cls(args, robot=robot, sim=sim, vis=vis, plot=plot)
+
+    def _build_x_obs(self) -> np.ndarray:
+        x_obs = np.zeros((self.num_sites, 6), dtype=np.float32)
+        for i, site in enumerate(self.site_names):
+            site_id = self.controller.wrench_sim.site_ids[site]
+            x_obs[i, :3] = np.asarray(self.data.site_xpos[site_id], dtype=np.float32)
+            rot = np.asarray(self.data.site_xmat[site_id], dtype=np.float32).reshape(
+                3, 3
+            )
+            x_obs[i, 3:6] = R.from_matrix(rot).as_rotvec().astype(np.float32)
+        return x_obs
+
+    def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
+        del sim
+        if "qpos" in obs:
+            self.controller.wrench_sim.set_qpos(
+                np.asarray(obs["qpos"], dtype=np.float32)
+            )
+            self.controller.wrench_sim.forward()
+        elif "motor_pos" in obs:
+            self.controller.wrench_sim.set_motor_angles(
+                np.asarray(obs["motor_pos"], dtype=np.float32)
+            )
+            self.controller.wrench_sim.forward()
+        image = obs.get("image")
+        if image is None:
+            image_arr = np.zeros(
+                (int(self.args.image_height), int(self.args.image_width), 3),
+                dtype=np.uint8,
+            )
+        else:
+            image_arr = _to_hwc_u8(
+                np.asarray(image),
+                size_hw=(int(self.args.image_height), int(self.args.image_width)),
+            )
+
+        x_obs = self._build_x_obs()
+        _status, _pose_command, cmd, _raw_action = self._step_dp_core(
+            now=float(obs.get("time", self.data.time)),
+            image_in=image_arr,
+            x_obs=x_obs,
+            x_wrench=None,
+            motor_pos=np.asarray(
+                obs.get("motor_pos", self.target_motor_pos), dtype=np.float32
+            ),
+        )
+        cmd = np.asarray(cmd, dtype=np.float32)
+        if cmd.shape != (self.num_sites, COMMAND_LAYOUT.width):
+            raise ValueError(
+                f"DP command_matrix shape {cmd.shape} != ({self.num_sites}, {COMMAND_LAYOUT.width})"
+            )
+        self.command_matrix[:] = cmd
+
+        motor_tor_obs = np.asarray(obs["motor_tor"], dtype=np.float32)
+        step_kwargs: dict[str, np.ndarray] = {}
+        if "qpos" in obs:
+            step_kwargs["qpos"] = np.asarray(obs["qpos"], dtype=np.float32)
+        elif "motor_pos" in obs:
+            step_kwargs["motor_pos"] = np.asarray(obs["motor_pos"], dtype=np.float32)
+        _, state_ref = self.controller.step(
+            command_matrix=self.command_matrix,
+            motor_torques=motor_tor_obs,
+            **step_kwargs,
+        )
+        if state_ref is not None:
+            self.target_motor_pos = np.asarray(state_ref.motor_pos, dtype=np.float32)
+        return {}, self.target_motor_pos.copy()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._close_dp_core()

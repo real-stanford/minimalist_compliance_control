@@ -1,29 +1,32 @@
-"""Standalone compliance VLM policy adapted from toddlerbot_internal.
-
-This module keeps the original compliance_vlm behavior (mode switch, affordance
-prediction, trajectory staging, fixed-trajectory support, video logging) while
-removing toddlerbot runtime dependencies.
-"""
-
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import shutil
 import tempfile
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import gin
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial.transform import Rotation as R
 
 from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT
+from minimalist_compliance_control.controller import (
+    ComplianceController,
+    ComplianceRefConfig,
+    ControllerConfig,
+)
+from minimalist_compliance_control.wrench_estimation import WrenchEstimateConfig
+from real_world.camera import Camera
 
-from .utils.camera import Camera
-from .utils.math_utils import ensure_matrix, get_damping_matrix
+from vlm.utils.math_utils import ensure_matrix, get_damping_matrix
 
 try:
     import joblib
@@ -34,7 +37,7 @@ else:
     _JOBLIB_IMPORT_ERROR = None
 
 try:
-    from .utils.comm_utils import ZMQNode
+    from vlm.utils.comm_utils import ZMQNode
 except Exception as exc:  # pragma: no cover
     ZMQNode = None  # type: ignore[assignment]
     _ZMQ_IMPORT_ERROR = exc
@@ -50,8 +53,8 @@ else:
     _CV2_IMPORT_ERROR = None
 
 try:
-    from .affordance.affordance_predictor import AffordancePredictor
-    from .affordance.plan_ee_pose import plan_end_effector_poses
+    from vlm.affordance.affordance_predictor import AffordancePredictor
+    from vlm.affordance.plan_ee_pose import plan_end_effector_poses
 except Exception as exc:  # pragma: no cover
     AffordancePredictor = None  # type: ignore[assignment]
     plan_end_effector_poses = None  # type: ignore[assignment]
@@ -66,34 +69,163 @@ LEAP_DRAW_POS = np.array(
 )
 
 
-@dataclass
-class ComplianceVLMInput:
-    """Input bundle per control step."""
-
-    time: float
-    x_obs: Optional[npt.NDArray[np.float32]] = None
-    x_wrench: Optional[npt.NDArray[np.float32]] = None
-    head_pos_world: Optional[npt.NDArray[np.float32]] = None
-    head_quat_world_wxyz: Optional[npt.NDArray[np.float32]] = None
-    left_image: Optional[npt.NDArray[np.uint8]] = None
-    right_image: Optional[npt.NDArray[np.uint8]] = None
-    mode_command: Optional[object] = None
+def ComplianceVLMInput(**kwargs):
+    return SimpleNamespace(**kwargs)
 
 
-@dataclass
-class ComplianceVLMOutput:
-    """Output bundle per control step."""
-
-    status: str
-    pose_command: npt.NDArray[np.float32]
-    command_matrix: npt.NDArray[np.float32]
-    trajectory_active: bool
+def ComplianceVLMOutput(**kwargs):
+    return SimpleNamespace(**kwargs)
 
 
-class StandaloneComplianceVLM:
-    """Standalone VLM policy that outputs compliance command matrices."""
+@gin.configurable
+def get_motor_config_paths(
+    default_config_path: Optional[str] = None,
+    robot_config_path: Optional[str] = None,
+    motors_config_path: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    return default_config_path, robot_config_path, motors_config_path
+
+
+def _to_hwc_u8(image: np.ndarray, *, size_hw: tuple[int, int]) -> np.ndarray:
+    arr = np.asarray(image)
+    if arr.ndim != 3:
+        arr = np.zeros((size_hw[0], size_hw[1], 3), dtype=np.uint8)
+    if arr.shape[0] in (1, 3) and arr.shape[2] not in (1, 3):
+        arr = np.transpose(arr, (1, 2, 0))
+    if arr.shape[2] == 1:
+        arr = np.repeat(arr, 3, axis=2)
+    if arr.dtype != np.uint8:
+        max_v = float(arr.max()) if arr.size else 0.0
+        if max_v <= 1.0:
+            arr = arr * 255.0
+        arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
+    return arr
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Compliance VLM per-tick policy")
+    parser.add_argument("--robot-name", type=str, default="toddlerbot_2xm")
+    parser.add_argument(
+        "--site-names", type=str, default="", help="Comma-separated site names"
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="waiting",
+        choices=["waiting", "wiping", "drawing"],
+    )
+    parser.add_argument("--object", type=str, default="black ink. vase")
+    parser.add_argument("--mode-control-port", type=int, default=5591)
+    parser.add_argument("--disable-zmq", action="store_true")
+    parser.add_argument("--use-camera-stream", action="store_true")
+    parser.add_argument("--disable-video", action="store_true")
+    parser.add_argument("--image-height", type=int, default=480)
+    parser.add_argument("--image-width", type=int, default=640)
+    return parser
+
+
+class ComplianceVLMPolicy:
+    """Per-tick compliance VLM policy with (obs, sim) -> (control_inputs, action)."""
 
     def __init__(
+        self,
+        args: argparse.Namespace,
+        *,
+        robot: str,
+        sim: str,
+        vis: bool,
+        plot: bool,
+    ) -> None:
+        del plot
+        self.args = args
+        self.robot = str(robot)
+        self.sim_backend = str(sim)
+        self.vis = bool(vis)
+        self.repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        os.chdir(self.repo_root)
+
+        config_name = "leap.gin" if self.robot == "leap" else "toddlerbot.gin"
+        config_path = os.path.join(self.repo_root, "config", config_name)
+        gin.clear_config()
+        gin.parse_config_file(config_path)
+        gin.bind_parameter(
+            "WrenchSimConfig.view", bool(self.vis and self.sim_backend == "mujoco")
+        )
+        gin.bind_parameter("WrenchSimConfig.render", False)
+
+        self.controller = ComplianceController(
+            config=ControllerConfig(),
+            estimate_config=WrenchEstimateConfig(),
+            ref_config=ComplianceRefConfig(),
+        )
+        if self.controller.compliance_ref is None:
+            raise ValueError("Controller compliance_ref must be configured.")
+        self.model = self.controller.wrench_sim.model
+        self.data = self.controller.wrench_sim.data
+        self.control_dt = float(self.controller.ref_config.dt)
+        self.site_names = tuple(self.controller.config.site_names)
+        self.num_sites = len(self.site_names)
+        default_state = self.controller.compliance_ref.get_default_state()
+        self.target_motor_pos = np.asarray(default_state.motor_pos, dtype=np.float32)
+
+        (
+            default_config_path,
+            robot_config_path,
+            motors_config_path,
+        ) = get_motor_config_paths()
+        if not default_config_path or not robot_config_path:
+            raise ValueError(
+                "get_motor_config_paths.default_config_path and robot_config_path must be configured."
+            )
+        if self.robot == "leap" and not motors_config_path:
+            raise ValueError(
+                "get_motor_config_paths.motors_config_path must be configured for leap."
+            )
+        self.default_config_path = str(default_config_path)
+        self.robot_config_path = str(robot_config_path)
+        self.motors_config_path = (
+            str(motors_config_path) if motors_config_path is not None else None
+        )
+
+        trnid = np.asarray(self.model.actuator_trnid[:, 0], dtype=np.int32)
+        self.qpos_adr = np.asarray(self.model.jnt_qposadr[trnid], dtype=np.int32)
+        self.qvel_adr = np.asarray(self.model.jnt_dofadr[trnid], dtype=np.int32)
+
+        self._vlm_input_cls = ComplianceVLMInput
+        site_names_override = None
+        if len(args.site_names.strip()) > 0:
+            site_names_override = [
+                s.strip() for s in args.site_names.split(",") if s.strip()
+            ]
+        self._init_vlm_core(
+            site_names=site_names_override or list(self.site_names),
+            robot_name=str(args.robot_name),
+            control_dt=self.control_dt,
+            mode_control_port=int(args.mode_control_port),
+            enable_mode_control=not bool(args.disable_zmq),
+            use_camera_stream=bool(args.use_camera_stream),
+            record_video=not bool(args.disable_video),
+        )
+        if args.mode == "wiping":
+            self.set_mode(True, object_label=None, site_names=None)
+        elif args.mode == "drawing":
+            self.set_mode(False, object_label=str(args.object), site_names=None)
+        self._closed = False
+
+    @classmethod
+    def from_argv(
+        cls,
+        argv: Sequence[str],
+        *,
+        robot: str,
+        sim: str,
+        vis: bool,
+        plot: bool,
+    ) -> "ComplianceVLMPolicy":
+        args = build_parser().parse_args(list(argv))
+        return cls(args, robot=robot, sim=sim, vis=vis, plot=plot)
+
+    def _init_vlm_core(
         self,
         site_names: Optional[List[str]] = None,
         robot_name: str = "toddlerbot_2xm",
@@ -241,8 +373,12 @@ class StandaloneComplianceVLM:
         self.right_camera: Optional[Camera] = None
         if use_camera_stream:
             try:
-                self.left_camera = Camera("left", device=camera_left_device)
-                self.right_camera = Camera("right", device=camera_right_device)
+                if camera_left_device is not None or camera_right_device is not None:
+                    print(
+                        "[ComplianceVLM] camera_left_device/camera_right_device are ignored with real_world.camera.Camera."
+                    )
+                self.left_camera = Camera("left")
+                self.right_camera = Camera("right")
             except Exception as exc:
                 self.left_camera = None
                 self.right_camera = None
@@ -933,7 +1069,7 @@ class StandaloneComplianceVLM:
             return f"{self.status}_requesting_prediction"
         return self.status
 
-    def step(self, inp: ComplianceVLMInput) -> ComplianceVLMOutput:
+    def _step_vlm_core(self, inp: ComplianceVLMInput) -> ComplianceVLMOutput:
         self._ensure_pose_from_obs(inp.x_obs)
         self.check_mode_command(inp.mode_command)
 
@@ -1083,7 +1219,7 @@ class StandaloneComplianceVLM:
             trajectory_active=bool(self.trajectory_plans),
         )
 
-    def close(self, exp_folder_path: str = "") -> None:
+    def _close_vlm_core(self, exp_folder_path: str = "") -> None:
         if self.mode_control_receiver is not None:
             self.mode_control_receiver.close()
             self.mode_control_receiver = None
@@ -1155,3 +1291,82 @@ class StandaloneComplianceVLM:
             self.prediction_future.cancel()
             self.prediction_future = None
         self.prediction_executor.shutdown(wait=False)
+
+    def _build_x_obs(self) -> np.ndarray:
+        x_obs = np.zeros((self.num_sites, 6), dtype=np.float32)
+        for i, site in enumerate(self.site_names):
+            site_id = self.controller.wrench_sim.site_ids[site]
+            x_obs[i, :3] = np.asarray(self.data.site_xpos[site_id], dtype=np.float32)
+            rot = np.asarray(self.data.site_xmat[site_id], dtype=np.float32).reshape(
+                3, 3
+            )
+            x_obs[i, 3:6] = R.from_matrix(rot).as_rotvec().astype(np.float32)
+        return x_obs
+
+    def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
+        del sim
+        if "qpos" in obs:
+            self.controller.wrench_sim.set_qpos(
+                np.asarray(obs["qpos"], dtype=np.float32)
+            )
+            self.controller.wrench_sim.forward()
+        elif "motor_pos" in obs:
+            self.controller.wrench_sim.set_motor_angles(
+                np.asarray(obs["motor_pos"], dtype=np.float32)
+            )
+            self.controller.wrench_sim.forward()
+        left_image = obs.get("left_image", obs.get("image"))
+        right_image = obs.get("right_image", left_image)
+        if left_image is None:
+            left = np.zeros(
+                (int(self.args.image_height), int(self.args.image_width), 3),
+                dtype=np.uint8,
+            )
+        else:
+            left = _to_hwc_u8(
+                np.asarray(left_image),
+                size_hw=(int(self.args.image_height), int(self.args.image_width)),
+            )
+        if right_image is None:
+            right = left.copy()
+        else:
+            right = _to_hwc_u8(
+                np.asarray(right_image),
+                size_hw=(int(self.args.image_height), int(self.args.image_width)),
+            )
+
+        x_obs = self._build_x_obs()
+        vlm_out = self._step_vlm_core(
+            self._vlm_input_cls(
+                time=float(obs.get("time", self.data.time)),
+                x_obs=x_obs,
+                left_image=left,
+                right_image=right,
+            )
+        )
+
+        cmd = np.asarray(vlm_out.command_matrix, dtype=np.float32)
+        if cmd.shape != (self.num_sites, COMMAND_LAYOUT.width):
+            raise ValueError(
+                f"VLM command_matrix shape {cmd.shape} != ({self.num_sites}, {COMMAND_LAYOUT.width})"
+            )
+        motor_tor_obs = np.asarray(obs["motor_tor"], dtype=np.float32)
+        step_kwargs: dict[str, np.ndarray] = {}
+        if "qpos" in obs:
+            step_kwargs["qpos"] = np.asarray(obs["qpos"], dtype=np.float32)
+        elif "motor_pos" in obs:
+            step_kwargs["motor_pos"] = np.asarray(obs["motor_pos"], dtype=np.float32)
+        _, state_ref = self.controller.step(
+            command_matrix=cmd,
+            motor_torques=motor_tor_obs,
+            **step_kwargs,
+        )
+        if state_ref is not None:
+            self.target_motor_pos = np.asarray(state_ref.motor_pos, dtype=np.float32)
+        return {}, self.target_motor_pos.copy()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._close_vlm_core()

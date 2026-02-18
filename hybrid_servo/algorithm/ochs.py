@@ -11,7 +11,7 @@ import scipy.linalg
 import scipy.sparse
 from qpsolvers import solve_qp
 
-from model_based.hybrid_servo.algorithm.solvehfvc import HFVC
+from hybrid_servo.algorithm.solvehfvc import HFVC
 
 # from toddlerbot.utils.misc_utils import profile
 

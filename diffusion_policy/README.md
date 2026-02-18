@@ -16,7 +16,7 @@ pip install torch torchvision diffusers opencv-python joblib
 Replay mode:
 
 ```bash
-python examples/run_compliance_dp.py \
+python examples/run_policy.py --policy compliance_dp --robot toddlerbot -- \
   --ckpt /path/to/best_ckpt.pth \
   --num-sites 2 \
   --replay-npz /path/to/replay_data.npz \
@@ -26,7 +26,7 @@ python examples/run_compliance_dp.py \
 Dummy mode:
 
 ```bash
-python examples/run_compliance_dp.py \
+python examples/run_policy.py --policy compliance_dp --robot toddlerbot -- \
   --ckpt /path/to/best_ckpt.pth \
   --num-sites 2
 ```

@@ -37,13 +37,13 @@ This layout is the shared interface across core, model-based, diffusion-policy, 
 
 ## Example Families
 - `examples/`
-  - Runner scripts for toddlerbot/leaphand compliance and top-level launchers.
-- `model_based/`
+  - Policy entry scripts plus a single shared launcher `run_policy.py`.
+- `hybrid_servo/`
   - OCHS/HFVC-based policies.
   - Major scripts are large monoliths:
-    - `examples/run_toddlerbot_model_based.py` (~1873 lines)
-    - `examples/run_leap_model_based.py` (~1878 lines)
-  - Includes local copy of hybrid-servo algorithms under `model_based/hybrid_servo/`.
+    - `examples/compliance_model_based_toddlerbot.py` (~1873 lines)
+    - `examples/compliance_model_based_leap.py` (~1878 lines)
+  - Includes local copy of hybrid-servo algorithms under `hybrid_servo/`.
 - `diffusion_policy/`
   - Diffusion inference wrapper (`StandaloneComplianceDP`) and model blocks.
 - `vlm/`
@@ -64,7 +64,7 @@ From `pyproject.toml` core deps:
 - `numpy`, `scipy`, `mujoco`, `mink`, `gin-config`.
 
 Optional example deps:
-- model-based: `qpsolvers`, `osqp`, `sympy`, `pyzmq` (and sometimes `cvxopt` path in `solvehfvc.py`),
+- model-based: `qpsolvers`, `osqp`, `sympy` (and sometimes `cvxopt` path in `solvehfvc.py`),
 - diffusion policy: `torch`, `torchvision`, `diffusers`, `opencv-python`, `joblib`,
 - VLM: `requests`, `open3d`, `pycocotools`, `pyzmq`, plus provider API key env vars.
 
@@ -77,15 +77,15 @@ Optional example deps:
 ## Practical Entry Points
 - Core package install: `pip install -e .`
 - Basic examples:
-  - `python examples/run_compliance.py --robot toddlerbot`
-  - `python examples/run_compliance.py --robot leap`
+  - `python examples/run_policy.py --policy compliance --robot toddlerbot`
+  - `python examples/run_policy.py --policy compliance --robot leap`
 - Model-based:
-  - `python examples/run_toddlerbot_model_based.py`
-  - `python examples/run_leap_model_based.py`
+  - `python examples/run_policy.py --policy compliance_model_based --robot toddlerbot`
+  - `python examples/run_policy.py --policy compliance_model_based --robot leap`
 - Diffusion policy:
-  - `python examples/run_compliance_dp.py ...`
+  - `python examples/run_policy.py --policy compliance_dp --robot toddlerbot -- ...`
 - VLM:
-  - `python examples/run_compliance_vlm.py ...`
+  - `python examples/run_policy.py --policy compliance_vlm --robot toddlerbot -- ...`
 
 ## Editing Guidance For Future Codex Turns
 - Preserve `COMMAND_LAYOUT` compatibility unless all consumers are updated.

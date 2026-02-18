@@ -10,20 +10,16 @@ This example runs a standalone model-based compliance policy with the phase flow
 Run policy:
 
 ```bash
-python examples/run_toddlerbot_model_based.py
+python examples/run_policy.py --policy compliance_model_based --robot toddlerbot
 ```
 
 On macOS MuJoCo viewer:
 
 ```bash
-mjpython examples/run_toddlerbot_model_based.py
+mjpython examples/run_policy.py --policy compliance_model_based --robot toddlerbot
 ```
 
-Keyboard control (run in another terminal):
-
-```bash
-python model_based/keyboard_control_ball.py --host 127.0.0.1 --port 5592
-```
+Keyboard control (focus the same terminal running the policy):
 
 Keyboard commands:
 
@@ -35,5 +31,5 @@ Keyboard commands:
 Optional extra dependencies:
 
 ```bash
-pip install qpsolvers osqp sympy pyzmq
+pip install qpsolvers osqp sympy
 ```

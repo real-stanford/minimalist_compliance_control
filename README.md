@@ -34,11 +34,11 @@ pip install -e ".[examples]" --config-settings=cmake.define.BUILD_DYNAMIXEL=ON
 Installed CLI entrypoints:
 
 ```bash
-mcc-run-compliance --robot leap --sim mujoco --vis
-mcc-run-toddlerbot-model-based
-mcc-run-leap-model-based
-mcc-run-compliance-dp --help
-mcc-run-compliance-vlm --help
+mcc-run-policy --policy compliance --robot leap --sim mujoco --vis
+mcc-run-policy --policy compliance_model_based --robot toddlerbot
+mcc-run-policy --policy compliance_model_based --robot leap -- --scene-xml descriptions/leap_hand/scene_object_fixed.xml
+mcc-run-policy --policy compliance_dp --robot toddlerbot -- --help
+mcc-run-policy --policy compliance_vlm --robot toddlerbot -- --help
 ```
 
 ## Core Modules
@@ -53,7 +53,7 @@ mcc-run-compliance-vlm --help
 
 Example usage is documented under:
 
-- `model_based/`
+- `hybrid_servo/`
 - `diffusion_policy/`
 - `vlm/`
 
