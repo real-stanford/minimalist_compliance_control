@@ -14,6 +14,7 @@ import importlib.util
 import os
 import platform
 import warnings
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -35,7 +36,6 @@ class RealWorld:
         default_config_path: str,
         robot_config_path: str,
         motors_config_path: str | None = None,
-        vis: bool = False,
         port_pattern: str | None = None,
         baudrate: int = 2_000_000,
         return_delay: int = 1,
@@ -50,13 +50,6 @@ class RealWorld:
         self.control_dt = float(control_dt)
         if self.control_dt <= 0.0:
             raise ValueError("control_dt must be > 0.")
-        self.vis = bool(vis)
-        if self.vis:
-            warnings.warn(
-                "RealWorld backend has no MuJoCo viewer; ignoring --vis.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
 
         self._robot_hint = os.path.basename(robot_config_path).lower()
         self._is_arx = "arx" in self._robot_hint
@@ -81,7 +74,13 @@ class RealWorld:
                 f"Hardware motor parameter length {len(self._kp)} != model.nu {self.model.nu}."
             )
 
-        self._qpos_adr, self._qvel_adr = self._build_actuator_joint_address()
+        (
+            self._motor_to_qpos_mat,
+            self._motor_to_qpos_bias,
+            self._qpos_motor_mask,
+            self._motor_to_qvel_mat,
+            self._qvel_motor_mask,
+        ) = self._build_motor_joint_maps()
         self._port_pattern = (
             port_pattern if port_pattern is not None else self._default_port_pattern()
         )
@@ -300,13 +299,173 @@ class RealWorld:
             np.asarray(r_winding, dtype=np.float32),
         )
 
-    def _build_actuator_joint_address(self) -> tuple[np.ndarray, np.ndarray]:
+    def _resolve_model_xml_path(self) -> Path | None:
+        xml_path_raw = Path(str(self.wrench_sim.config.xml_path))
+        candidates: list[Path] = []
+        if xml_path_raw.is_absolute():
+            candidates.append(xml_path_raw)
+        else:
+            candidates.append(Path.cwd() / xml_path_raw)
+            candidates.append(Path(__file__).resolve().parents[1] / xml_path_raw)
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _build_motor_joint_maps(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        # Map scalar joint states (qpos/qvel) from actuator motor angles.
+        nu = int(self.model.nu)
+        row_by_joint: dict[str, np.ndarray] = {}
+        bias_by_joint: dict[str, float] = {}
+
         trnid = np.asarray(self.model.actuator_trnid[:, 0], dtype=np.int32)
-        if np.any(trnid < 0):
-            raise ValueError("All actuators must map to valid joints for real backend.")
-        qpos_adr = np.asarray(self.model.jnt_qposadr[trnid], dtype=np.int32)
-        qvel_adr = np.asarray(self.model.jnt_dofadr[trnid], dtype=np.int32)
-        return qpos_adr, qvel_adr
+        for act_idx, joint_id in enumerate(trnid):
+            if joint_id < 0:
+                continue
+            joint_name = mujoco.mj_id2name(
+                self.model, mujoco.mjtObj.mjOBJ_JOINT, int(joint_id)
+            )
+            if joint_name is None:
+                continue
+            row = np.zeros(nu, dtype=np.float32)
+            row[act_idx] = 1.0
+            row_by_joint[joint_name] = row
+            bias_by_joint[joint_name] = 0.0
+
+        eq_rules: list[tuple[str, str, float, float]] = []
+        tendon_rules: list[list[tuple[str, float]]] = []
+        xml_path = self._resolve_model_xml_path()
+        if xml_path is not None:
+            try:
+                root = ET.parse(xml_path).getroot()
+                eq_elem = root.find("equality")
+                if eq_elem is not None:
+                    for elem in eq_elem.findall("joint"):
+                        joint_1 = elem.attrib.get("joint1", "").strip()
+                        joint_2 = elem.attrib.get("joint2", "").strip()
+                        polycoef_text = elem.attrib.get("polycoef", "0 1 0 0 0")
+                        polycoef = [float(x) for x in polycoef_text.split()]
+                        while len(polycoef) < 5:
+                            polycoef.append(0.0)
+                        if abs(polycoef[2]) > 1e-8 or abs(polycoef[3]) > 1e-8:
+                            continue
+                        if abs(polycoef[4]) > 1e-8:
+                            continue
+                        if joint_1 and joint_2:
+                            eq_rules.append(
+                                (joint_1, joint_2, float(polycoef[0]), float(polycoef[1]))
+                            )
+
+                tendon_elem = root.find("tendon")
+                if tendon_elem is not None:
+                    for fixed in tendon_elem.findall("fixed"):
+                        joints: list[tuple[str, float]] = []
+                        for elem in fixed.findall("joint"):
+                            joint_name = elem.attrib.get("joint", "").strip()
+                            coef = float(elem.attrib.get("coef", "1.0"))
+                            if joint_name:
+                                joints.append((joint_name, coef))
+                        if len(joints) >= 2:
+                            tendon_rules.append(joints)
+            except Exception:
+                pass
+
+        for _ in range(8):
+            changed = False
+
+            for joint_1, joint_2, c0, c1 in eq_rules:
+                if joint_1 in row_by_joint:
+                    continue
+                if joint_2 not in row_by_joint:
+                    continue
+                row_by_joint[joint_1] = row_by_joint[joint_2] * float(c1)
+                bias_by_joint[joint_1] = float(c0) + float(c1) * float(
+                    bias_by_joint.get(joint_2, 0.0)
+                )
+                changed = True
+
+            for joints in tendon_rules:
+                unknown = [
+                    (name, coef)
+                    for name, coef in joints
+                    if name not in row_by_joint and abs(coef) > 1e-8
+                ]
+                if len(unknown) != 1:
+                    continue
+                dep_joint, dep_coef = unknown[0]
+                accum_row = np.zeros(nu, dtype=np.float32)
+                accum_bias = 0.0
+                valid = True
+                for joint_name, coef in joints:
+                    if joint_name == dep_joint:
+                        continue
+                    if joint_name not in row_by_joint:
+                        valid = False
+                        break
+                    accum_row += float(coef) * row_by_joint[joint_name]
+                    accum_bias += float(coef) * float(bias_by_joint.get(joint_name, 0.0))
+                if not valid:
+                    continue
+                row_by_joint[dep_joint] = -accum_row / float(dep_coef)
+                bias_by_joint[dep_joint] = -accum_bias / float(dep_coef)
+                changed = True
+
+            if not changed:
+                break
+
+        qpos_mat = np.zeros((int(self.model.nq), nu), dtype=np.float32)
+        qpos_bias = np.zeros(int(self.model.nq), dtype=np.float32)
+        qpos_mask = np.zeros(int(self.model.nq), dtype=bool)
+        qvel_mat = np.zeros((int(self.model.nv), nu), dtype=np.float32)
+        qvel_mask = np.zeros(int(self.model.nv), dtype=bool)
+
+        for joint_name, row in row_by_joint.items():
+            joint_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name
+            )
+            if joint_id < 0:
+                continue
+            jnt_type = int(self.model.jnt_type[joint_id])
+            if jnt_type not in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
+                continue
+            qpos_adr = int(self.model.jnt_qposadr[joint_id])
+            qvel_adr = int(self.model.jnt_dofadr[joint_id])
+            qpos_mat[qpos_adr] = np.asarray(row, dtype=np.float32)
+            qpos_bias[qpos_adr] = float(bias_by_joint.get(joint_name, 0.0))
+            qpos_mask[qpos_adr] = True
+            qvel_mat[qvel_adr] = np.asarray(row, dtype=np.float32)
+            qvel_mask[qvel_adr] = True
+
+        return qpos_mat, qpos_bias, qpos_mask, qvel_mat, qvel_mask
+
+    def get_qpos(self, motor_pos: np.ndarray) -> np.ndarray:
+        motor_pos_arr = np.asarray(motor_pos, dtype=np.float32).reshape(-1)
+        if motor_pos_arr.shape[0] != self.model.nu:
+            raise ValueError(
+                f"motor_pos shape {motor_pos_arr.shape[0]} must equal model.nu {self.model.nu}"
+            )
+        qpos = np.asarray(self.data.qpos, dtype=np.float32).copy()
+        if np.any(self._qpos_motor_mask):
+            qpos[self._qpos_motor_mask] = (
+                self._motor_to_qpos_mat[self._qpos_motor_mask] @ motor_pos_arr
+                + self._motor_to_qpos_bias[self._qpos_motor_mask]
+            )
+        return qpos
+
+    def _get_qvel_from_motor_vel(self, motor_vel: np.ndarray) -> np.ndarray:
+        motor_vel_arr = np.asarray(motor_vel, dtype=np.float32).reshape(-1)
+        if motor_vel_arr.shape[0] != self.model.nu:
+            raise ValueError(
+                f"motor_vel shape {motor_vel_arr.shape[0]} must equal model.nu {self.model.nu}"
+            )
+        qvel = np.asarray(self.data.qvel, dtype=np.float32).copy()
+        if np.any(self._qvel_motor_mask):
+            qvel[self._qvel_motor_mask] = (
+                self._motor_to_qvel_mat[self._qvel_motor_mask] @ motor_vel_arr
+            )
+        return qvel
 
     def _flatten_states(self, motor_state: dict, key: str) -> np.ndarray:
         vec: list[float] = []
@@ -392,8 +551,8 @@ class RealWorld:
             )
         tau = self._motor_cur_to_torque(cur, vel, pwm, vin)
 
-        self.data.qpos[self._qpos_adr] = pos
-        self.data.qvel[self._qvel_adr] = vel
+        self.data.qpos[:] = self.get_qpos(pos)
+        self.data.qvel[:] = self._get_qvel_from_motor_vel(vel)
         self.data.actuator_force[:] = tau
         self.data.time += self.control_dt
         mujoco.mj_forward(self.model, self.data)
@@ -408,11 +567,15 @@ class RealWorld:
         motor_tor = self._motor_cur_to_torque(
             motor_cur, motor_vel, motor_pwm, motor_vin
         )
+        qpos = self.get_qpos(motor_pos)
+        qvel = self._get_qvel_from_motor_vel(motor_vel)
 
         obs: dict[str, Any] = {
             "time": float(self.data.time),
             "motor_pos": motor_pos,
             "motor_vel": motor_vel,
+            "qpos": qpos,
+            "qvel": qvel,
             "motor_cur": motor_cur,
             "motor_tor": motor_tor,
             "motor_pwm": motor_pwm,

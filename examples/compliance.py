@@ -252,41 +252,38 @@ class CompliancePolicy:
             self.perturb_site_forces[:] = 0.0
 
     def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
-        del sim
         self._update_force_perturbation()
 
         if self.sim_backend == "mujoco":
             if self.site_force_applier is not None:
                 self.site_force_applier(self.data, self.perturb_site_forces)
-            self.controller.wrench_sim.set_debug_site_targets(
-                {
-                    site_name: np.concatenate(
-                        [self.pos_cmd[idx], self.ori_cmd[idx]], axis=0
-                    ).astype(np.float32)
-                    for idx, site_name in enumerate(self.force_site_names)
-                }
-            )
-            self.controller.wrench_sim.set_debug_site_forces(
-                {
-                    site_name: self.perturb_site_forces[idx]
-                    for idx, site_name in enumerate(self.force_site_names)
-                },
-                vis_scale=self.force_vis_scale,
-            )
+            if hasattr(sim, "set_debug_site_targets"):
+                sim.set_debug_site_targets(
+                    {
+                        site_name: np.concatenate(
+                            [self.pos_cmd[idx], self.ori_cmd[idx]], axis=0
+                        ).astype(np.float32)
+                        for idx, site_name in enumerate(self.force_site_names)
+                    }
+                )
+            if hasattr(sim, "set_debug_site_forces"):
+                sim.set_debug_site_forces(
+                    {
+                        site_name: self.perturb_site_forces[idx]
+                        for idx, site_name in enumerate(self.force_site_names)
+                    },
+                    vis_scale=self.force_vis_scale,
+                )
 
         self.command_matrix[:, COMMAND_LAYOUT.position] = self.pos_cmd
         self.command_matrix[:, COMMAND_LAYOUT.orientation] = self.ori_cmd
 
         motor_tor_obs = np.asarray(obs["motor_tor"], dtype=np.float32)
-        step_kwargs: dict[str, np.ndarray] = {}
-        if "qpos" in obs:
-            step_kwargs["qpos"] = np.asarray(obs["qpos"], dtype=np.float32)
-        elif "motor_pos" in obs:
-            step_kwargs["motor_pos"] = np.asarray(obs["motor_pos"], dtype=np.float32)
+        qpos_obs = np.asarray(obs["qpos"], dtype=np.float32)
         wrenches, state_ref = self.controller.step(
             command_matrix=self.command_matrix,
             motor_torques=motor_tor_obs,
-            **step_kwargs,
+            qpos=qpos_obs,
         )
 
         if self.plotter is not None:
@@ -322,6 +319,4 @@ class CompliancePolicy:
         self._closed = True
         if self.plotter is not None:
             self.plotter.close()
-        self.controller.wrench_sim.clear_debug_site_targets()
-        self.controller.wrench_sim.clear_debug_site_forces()
         self.key_listener.stop()

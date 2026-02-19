@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
 
 import mujoco
+import mujoco.viewer
 import numpy as np
 import numpy.typing as npt
 
@@ -133,6 +134,11 @@ class MuJoCoSim:
             raise ValueError("All actuators must map to valid joints in MuJoCoSim.")
         self._qpos_adr = np.asarray(self.model.jnt_qposadr[trnid], dtype=np.int32)
         self._qvel_adr = np.asarray(self.model.jnt_dofadr[trnid], dtype=np.int32)
+        self.viewer = None
+        self._debug_site_forces: Dict[str, npt.NDArray[np.float32]] = {}
+        self._debug_force_vis_scale = 0.02
+        self._debug_site_targets: Dict[str, npt.NDArray[np.float32]] = {}
+        self._debug_target_axis_length = 0.04
 
     def step(self) -> None:
         for _ in range(self.n_substeps):
@@ -165,11 +171,167 @@ class MuJoCoSim:
             "qvel": np.asarray(self.data.qvel, dtype=np.float32).copy(),
         }
 
+    def set_debug_site_targets(
+        self,
+        site_targets: Dict[str, npt.NDArray[np.float32]],
+        axis_length: float = 0.04,
+    ) -> None:
+        self._debug_site_targets = {
+            name: np.asarray(target, dtype=np.float32).reshape(6)
+            for name, target in site_targets.items()
+        }
+        self._debug_target_axis_length = float(axis_length)
+
+    def clear_debug_site_targets(self) -> None:
+        self._debug_site_targets = {}
+
+    def set_debug_site_forces(
+        self,
+        site_forces: Dict[str, npt.NDArray[np.float32]],
+        vis_scale: float = 0.02,
+    ) -> None:
+        self._debug_site_forces = {
+            name: np.asarray(force, dtype=np.float32).reshape(3)
+            for name, force in site_forces.items()
+        }
+        self._debug_force_vis_scale = float(vis_scale)
+
+    def clear_debug_site_forces(self) -> None:
+        self._debug_site_forces = {}
+
+    def _ensure_viewer(self) -> None:
+        if self.viewer is not None:
+            return
+        self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+
+    def _draw_debug_overlays(self) -> None:
+        if self.viewer is None:
+            return
+        if not hasattr(self.viewer, "user_scn"):
+            return
+        if not hasattr(self.viewer, "lock"):
+            return
+
+        with self.viewer.lock():
+            scene = self.viewer.user_scn
+            scene.ngeom = 0
+            self._draw_debug_site_targets(scene)
+            self._draw_debug_site_forces(scene)
+
+    def _draw_connector(
+        self,
+        scene: mujoco.MjvScene,
+        start: npt.NDArray[np.float64],
+        end: npt.NDArray[np.float64],
+        radius: float,
+        color_rgba: npt.NDArray[np.float32],
+        geom_type: int,
+    ) -> None:
+        if scene.ngeom >= scene.maxgeom:
+            return
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            geom,
+            geom_type,
+            np.array([0.01, 0.01, 0.01], dtype=np.float64),
+            np.zeros(3, dtype=np.float64),
+            np.eye(3, dtype=np.float64).reshape(-1),
+            np.asarray(color_rgba, dtype=np.float32),
+        )
+        mujoco.mjv_connector(
+            geom,
+            geom_type,
+            float(radius),
+            start,
+            end,
+        )
+        scene.ngeom += 1
+
+    def _rotvec_to_mat(
+        self, rotvec: npt.NDArray[np.float64]
+    ) -> npt.NDArray[np.float64]:
+        theta = float(np.linalg.norm(rotvec))
+        if theta < 1e-12:
+            return np.eye(3, dtype=np.float64)
+        axis = rotvec / theta
+        x, y, z = float(axis[0]), float(axis[1]), float(axis[2])
+        k = np.array(
+            [
+                [0.0, -z, y],
+                [z, 0.0, -x],
+                [-y, x, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        eye = np.eye(3, dtype=np.float64)
+        return eye + np.sin(theta) * k + (1.0 - np.cos(theta)) * (k @ k)
+
+    def _draw_debug_site_targets(self, scene: mujoco.MjvScene) -> None:
+        if not self._debug_site_targets:
+            return
+        axis_colors = (
+            np.array([1.0, 0.1, 0.1, 0.9], dtype=np.float32),
+            np.array([0.1, 1.0, 0.1, 0.9], dtype=np.float32),
+            np.array([0.1, 0.1, 1.0, 0.9], dtype=np.float32),
+        )
+        axis_length = float(self._debug_target_axis_length)
+        for target in self._debug_site_targets.values():
+            start = np.asarray(target[:3], dtype=np.float64)
+            rotmat = self._rotvec_to_mat(np.asarray(target[3:6], dtype=np.float64))
+            for axis_idx in range(3):
+                end = start + axis_length * rotmat[:, axis_idx]
+                self._draw_connector(
+                    scene=scene,
+                    start=start,
+                    end=end,
+                    radius=0.004,
+                    color_rgba=axis_colors[axis_idx],
+                    geom_type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                )
+                if scene.ngeom >= scene.maxgeom:
+                    return
+
+    def _draw_debug_site_forces(self, scene: mujoco.MjvScene) -> None:
+        if not self._debug_site_forces:
+            return
+        for site_name, force in self._debug_site_forces.items():
+            site_id = self.wrench_sim.site_ids.get(site_name, -1)
+            if site_id < 0:
+                continue
+            if scene.ngeom >= scene.maxgeom:
+                break
+            start = np.asarray(self.data.site_xpos[site_id], dtype=np.float64)
+            end = start + np.asarray(force, dtype=np.float64) * float(
+                self._debug_force_vis_scale
+            )
+            self._draw_connector(
+                scene=scene,
+                start=start,
+                end=end,
+                radius=0.005,
+                color_rgba=np.array([1.0, 0.2, 0.2, 0.9], dtype=np.float32),
+                geom_type=mujoco.mjtGeom.mjGEOM_ARROW,
+            )
+
     def sync(self) -> bool:
         if not self.vis:
             return True
-        self.wrench_sim.visualize()
-        return self.wrench_sim.viewer is not None
+        if self.viewer is None:
+            self._ensure_viewer()
+        if self.viewer is None:
+            return False
+        if not self.viewer.is_running():
+            self.viewer.close()
+            self.viewer = None
+            return False
+        self._draw_debug_overlays()
+        self.viewer.sync()
+        if getattr(self.wrench_sim.config, "render", False):
+            self.wrench_sim.record_frame()
+        return True
 
     def close(self) -> None:
+        if self.viewer is not None:
+            self.viewer.close()
+            self.viewer = None
         self.wrench_sim.close()

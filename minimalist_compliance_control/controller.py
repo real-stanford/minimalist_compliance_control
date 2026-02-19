@@ -224,66 +224,23 @@ class ComplianceController:
             avoid_self_collision=bool(cfg.avoid_self_collision),
         )
         self._last_state = self.compliance_ref.get_default_state()
-        self._default_motor_pos = default_motor_pos
         if default_qpos is not None and default_qpos.size == model.nq:
             self.wrench_sim.set_qpos(default_qpos)
             self.wrench_sim.forward()
-
-        self._joint_dof_union: Optional[npt.NDArray[np.int32]] = None
-        if self.config.joint_indices_by_site:
-            union = np.unique(
-                np.concatenate(
-                    [
-                        np.asarray(v, dtype=np.int32).reshape(-1)
-                        for v in self.config.joint_indices_by_site.values()
-                    ]
-                )
-            )
-            self._joint_dof_union = union
 
     def step(
         self,
         command_matrix: npt.NDArray[np.float32],
         motor_torques: npt.NDArray[np.float32],
-        joint_pos: Optional[npt.NDArray[np.float32]] = None,
-        qpos: Optional[npt.NDArray[np.float32]] = None,
-        motor_pos: Optional[npt.NDArray[np.float32]] = None,
+        qpos: npt.NDArray[np.float32],
         base_pos: Optional[npt.NDArray[np.float32]] = None,
         base_quat: Optional[npt.NDArray[np.float32]] = None,
         use_estimated_wrench: bool = True,
     ) -> tuple[Dict[str, npt.NDArray[np.float32]], Optional[ComplianceState]]:
         """Run one loop and return estimated wrenches and optional compliance state."""
         command_matrix = np.asarray(command_matrix, dtype=np.float32).copy()
-        if qpos is not None:
-            self.wrench_sim.set_qpos(qpos)
-        elif joint_pos is not None:
-            joint_pos_arr = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
-            if joint_pos_arr.size in (
-                self.wrench_sim.model.nq,
-                self.wrench_sim.model.njnt,
-            ):
-                self.wrench_sim.set_joint_positions(joint_pos_arr)
-            elif (
-                self._joint_dof_union is not None
-                and joint_pos_arr.size == self._joint_dof_union.size
-            ):
-                self.wrench_sim.set_dof_positions(self._joint_dof_union, joint_pos_arr)
-            else:
-                raise ValueError(
-                    "joint_pos length does not match model.nq/model.njnt or joint_indices_by_site union."
-                )
-        else:
-            motor_pos_arr = (
-                np.asarray(motor_pos, dtype=np.float32)
-                if motor_pos is not None
-                else np.asarray(self._default_motor_pos, dtype=np.float32)
-            )
-            self.wrench_sim.set_motor_angles(motor_pos_arr)
+        self.wrench_sim.set_qpos(np.asarray(qpos, dtype=np.float32))
         self.wrench_sim.forward()
-        if getattr(self.wrench_sim.config, "view", False):
-            self.wrench_sim.visualize()
-        if getattr(self.wrench_sim.config, "render", False):
-            self.wrench_sim.record_frame()
 
         base_pos_est = (
             np.asarray(base_pos, dtype=np.float32).copy()

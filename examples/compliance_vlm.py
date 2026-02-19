@@ -1242,16 +1242,9 @@ class ComplianceVLMPolicy:
 
     def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
         del sim
-        if "qpos" in obs:
-            self.controller.wrench_sim.set_qpos(
-                np.asarray(obs["qpos"], dtype=np.float32)
-            )
-            self.controller.wrench_sim.forward()
-        elif "motor_pos" in obs:
-            self.controller.wrench_sim.set_motor_angles(
-                np.asarray(obs["motor_pos"], dtype=np.float32)
-            )
-            self.controller.wrench_sim.forward()
+        qpos_obs = np.asarray(obs["qpos"], dtype=np.float32)
+        self.controller.wrench_sim.set_qpos(qpos_obs)
+        self.controller.wrench_sim.forward()
         left_image = obs.get("left_image", obs.get("image"))
         right_image = obs.get("right_image", left_image)
         if left_image is None:
@@ -1288,15 +1281,10 @@ class ComplianceVLMPolicy:
                 f"VLM command_matrix shape {cmd.shape} != ({self.num_sites}, {COMMAND_LAYOUT.width})"
             )
         motor_tor_obs = np.asarray(obs["motor_tor"], dtype=np.float32)
-        step_kwargs: dict[str, np.ndarray] = {}
-        if "qpos" in obs:
-            step_kwargs["qpos"] = np.asarray(obs["qpos"], dtype=np.float32)
-        elif "motor_pos" in obs:
-            step_kwargs["motor_pos"] = np.asarray(obs["motor_pos"], dtype=np.float32)
         _, state_ref = self.controller.step(
             command_matrix=cmd,
             motor_torques=motor_tor_obs,
-            **step_kwargs,
+            qpos=qpos_obs,
         )
         if state_ref is not None:
             self.target_motor_pos = np.asarray(state_ref.motor_pos, dtype=np.float32)

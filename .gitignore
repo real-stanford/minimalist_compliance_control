@@ -14,6 +14,9 @@ build/
 dist/
 pip-wheel-metadata/
 
+# C extensions
+*.so
+
 # Tool caches
 .pytest_cache/
 .mypy_cache/

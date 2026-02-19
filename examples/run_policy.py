@@ -14,8 +14,8 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from minimalist_compliance_control.real_world import RealWorld
-from minimalist_compliance_control.sim import (
+from examples.real_world import RealWorld
+from examples.sim import (
     MuJoCoSim,
     build_clamped_torque_substep_control,
     build_site_force_applier,
@@ -265,7 +265,7 @@ def _run_compliance(args: argparse.Namespace) -> None:
         vis=bool(args.vis),
         plot=bool(args.plot),
     )
-    sim = _build_compliance_sim(policy, args)
+    sim = _build_sim(policy, args)
     _run_tick_loop(policy, sim, args)
 
 
@@ -280,7 +280,7 @@ def _run_compliance_model_based(
         vis=bool(args.vis),
         plot=bool(args.plot),
     )
-    sim = _build_model_based_sim(policy, args)
+    sim = _build_sim(policy, args)
     _run_tick_loop(policy, sim, args)
 
 
@@ -293,7 +293,7 @@ def _run_compliance_dp(args: argparse.Namespace, remainder: Sequence[str]) -> No
         vis=bool(args.vis),
         plot=bool(args.plot),
     )
-    sim = _build_dp_or_vlm_sim(policy, args)
+    sim = _build_sim(policy, args)
     _run_tick_loop(policy, sim, args)
 
 
@@ -306,92 +306,91 @@ def _run_compliance_vlm(args: argparse.Namespace, remainder: Sequence[str]) -> N
         vis=bool(args.vis),
         plot=bool(args.plot),
     )
-    sim = _build_dp_or_vlm_sim(policy, args)
+    sim = _build_sim(policy, args)
     _run_tick_loop(policy, sim, args)
 
 
-def _build_compliance_sim(policy: Any, args: argparse.Namespace) -> Any:
+def _get_motor_config_paths(policy: Any) -> tuple[str, str, str | None] | None:
+    if hasattr(policy, "motor_cfg_paths"):
+        cfg = policy.motor_cfg_paths
+        return (
+            str(cfg.default_config_path),
+            str(cfg.robot_config_path),
+            str(cfg.motors_config_path) if cfg.motors_config_path is not None else None,
+        )
+    if hasattr(policy, "default_config_path") and hasattr(policy, "robot_config_path"):
+        return (
+            str(policy.default_config_path),
+            str(policy.robot_config_path),
+            str(policy.motors_config_path)
+            if getattr(policy, "motors_config_path", None) is not None
+            else None,
+        )
+    return None
+
+
+def _build_sim(policy: Any, args: argparse.Namespace) -> Any:
     if str(args.sim) == "mujoco":
-        motor_params = load_motor_params(
-            model=policy.model,
-            default_config_path=policy.motor_cfg_paths.default_config_path,
-            robot_config_path=policy.motor_cfg_paths.robot_config_path,
-            motors_config_path=policy.motor_cfg_paths.motors_config_path,
-        )
-        torque_substep_control = build_clamped_torque_substep_control(
-            qpos_adr=policy.qpos_adr,
-            qvel_adr=policy.qvel_adr,
-            motor_params=motor_params,
-            target_motor_pos_getter=lambda: policy.target_motor_pos,
-        )
-        policy.site_force_applier = build_site_force_applier(
-            model=policy.model,
-            site_ids=policy.force_site_ids,
-        )
+        impl = getattr(policy, "impl", policy)
+        if hasattr(policy, "impl"):
+            substep_control = impl.substep_control
+            wrench_sim = impl.controller.wrench_sim
+            model = impl.model
+            data = impl.data
+        else:
+            cfg_paths = _get_motor_config_paths(policy)
+            if cfg_paths is None:
+                raise ValueError("Missing motor config paths for simulation setup.")
+            default_config_path, robot_config_path, motors_config_path = cfg_paths
+            motor_params = load_motor_params(
+                model=policy.model,
+                default_config_path=default_config_path,
+                robot_config_path=robot_config_path,
+                motors_config_path=motors_config_path,
+            )
+            substep_control = build_clamped_torque_substep_control(
+                qpos_adr=policy.qpos_adr,
+                qvel_adr=policy.qvel_adr,
+                motor_params=motor_params,
+                target_motor_pos_getter=lambda: policy.target_motor_pos,
+            )
+            if hasattr(policy, "force_site_ids"):
+                policy.site_force_applier = build_site_force_applier(
+                    model=policy.model,
+                    site_ids=policy.force_site_ids,
+                )
+            wrench_sim = policy.controller.wrench_sim
+            model = policy.model
+            data = policy.data
+
         sim = MuJoCoSim(
-            policy.controller.wrench_sim,
+            wrench_sim,
             control_dt=policy.control_dt,
-            sim_dt=float(policy.model.opt.timestep),
+            sim_dt=float(model.opt.timestep),
             vis=bool(args.vis),
-            substep_control=torque_substep_control,
+            substep_control=substep_control,
         )
-        policy.data.qpos[:] = policy.controller.compliance_ref.default_qpos.copy()
-        policy.controller.wrench_sim.forward()
+        compliance_ref = getattr(impl.controller, "compliance_ref", None)
+        if (
+            compliance_ref is not None
+            and getattr(compliance_ref, "default_qpos", None) is not None
+        ):
+            data.qpos[:] = np.asarray(compliance_ref.default_qpos, dtype=np.float32)
+            impl.controller.wrench_sim.forward()
         return sim
-    return RealWorld(
-        policy.controller.wrench_sim,
-        control_dt=policy.control_dt,
-        default_config_path=policy.motor_cfg_paths.default_config_path,
-        robot_config_path=policy.motor_cfg_paths.robot_config_path,
-        motors_config_path=policy.motor_cfg_paths.motors_config_path,
-        vis=bool(args.vis),
-    )
 
-
-def _build_dp_or_vlm_sim(policy: Any, args: argparse.Namespace) -> Any:
-    if str(args.sim) == "mujoco":
-        motor_params = load_motor_params(
-            model=policy.model,
-            default_config_path=policy.default_config_path,
-            robot_config_path=policy.robot_config_path,
-            motors_config_path=policy.motors_config_path,
-        )
-        torque_substep_control = build_clamped_torque_substep_control(
-            qpos_adr=policy.qpos_adr,
-            qvel_adr=policy.qvel_adr,
-            motor_params=motor_params,
-            target_motor_pos_getter=lambda: policy.target_motor_pos,
-        )
-        sim = MuJoCoSim(
-            policy.controller.wrench_sim,
-            control_dt=policy.control_dt,
-            sim_dt=float(policy.model.opt.timestep),
-            vis=bool(args.vis),
-            substep_control=torque_substep_control,
-        )
-        policy.data.qpos[:] = policy.controller.compliance_ref.default_qpos.copy()
-        policy.controller.wrench_sim.forward()
-        return sim
-    return RealWorld(
-        policy.controller.wrench_sim,
-        control_dt=policy.control_dt,
-        default_config_path=policy.default_config_path,
-        robot_config_path=policy.robot_config_path,
-        motors_config_path=policy.motors_config_path,
-        vis=bool(args.vis),
-    )
-
-
-def _build_model_based_sim(policy: Any, args: argparse.Namespace) -> Any:
-    if str(args.sim) != "mujoco":
+    if hasattr(policy, "impl"):
         raise ValueError("compliance_model_based currently supports only --sim mujoco")
-    impl = policy.impl
-    return MuJoCoSim(
-        impl.controller.wrench_sim,
+    cfg_paths = _get_motor_config_paths(policy)
+    if cfg_paths is None:
+        raise ValueError("Missing motor config paths for real backend setup.")
+    default_config_path, robot_config_path, motors_config_path = cfg_paths
+    return RealWorld(
+        policy.controller.wrench_sim,
         control_dt=policy.control_dt,
-        sim_dt=float(impl.model.opt.timestep),
-        vis=bool(args.vis),
-        substep_control=impl.substep_control,
+        default_config_path=default_config_path,
+        robot_config_path=robot_config_path,
+        motors_config_path=motors_config_path,
     )
 
 
