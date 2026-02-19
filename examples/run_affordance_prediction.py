@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
-import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -147,7 +145,7 @@ def load_stereo_pair(
 
 
 def build_depth_config(
-    robot: str, image_hw: Tuple[int, int], zmax: float, temp_dir: Path
+    robot: str, image_hw: Tuple[int, int], zmax: float
 ) -> Dict[str, object]:
     camera_yaml_path = ASSETS_DIR / f"{robot}_camera.yml"
     if not camera_yaml_path.exists():
@@ -176,17 +174,10 @@ def build_depth_config(
     calibration = to_numpy_fields(calibration)
     rectification = to_numpy_fields(rectification)
 
-    calib_path = temp_dir / "calibration.pkl"
-    rect_path = temp_dir / "rectification.npz"
-    with open(calib_path, "wb") as f:
-        pickle.dump(calibration, f)
-    with open(rect_path, "wb") as f:
-        pickle.dump(rectification, f)
-
     height, width = image_hw
     return {
-        "calib_params": str(calib_path),
-        "rec_params": str(rect_path),
+        "calib_params": calibration,
+        "rec_params": rectification,
         "calib_width": int(width),
         "calib_height": int(height),
         "zmax": float(zmax),
@@ -256,95 +247,92 @@ def main() -> None:
         tool,
     ) = planning_gains(robot, task)
 
-    with tempfile.TemporaryDirectory(prefix=f"{robot}_affordance_depth_") as tmp_dir:
-        depth_config = build_depth_config(
-            robot=robot,
-            image_hw=first_left_img.shape[:2],
-            zmax=args.zmax,
-            temp_dir=Path(tmp_dir),
-        )
-        predictor = AffordancePredictor(
-            provider=args.provider,
-            model=args.model,
-            default_task=task_text,
-            depth_config=depth_config,
-        )
-        try:
-            for idx, (left_path, right_path) in enumerate(stereo_pairs):
-                output_dir = base_output_dir / f"prediction_{idx}"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                save_run_args(
-                    output_dir / "args.json",
-                    robot=robot,
-                    robot_variant=robot_variant,
-                    task=task,
-                    object_label=object_label,
-                    site_names=site_names,
-                    task_text=task_text,
-                    left_image=left_path,
-                    right_image=right_path,
-                    head_pos=head_pos,
-                    head_quat=head_quat,
-                )
+    depth_config = build_depth_config(
+        robot=robot,
+        image_hw=first_left_img.shape[:2],
+        zmax=args.zmax,
+    )
+    predictor = AffordancePredictor(
+        provider=args.provider,
+        model=args.model,
+        default_task=task_text,
+        depth_config=depth_config,
+    )
+    try:
+        for idx, (left_path, right_path) in enumerate(stereo_pairs):
+            output_dir = base_output_dir / f"prediction_{idx}"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            save_run_args(
+                output_dir / "args.json",
+                robot=robot,
+                robot_variant=robot_variant,
+                task=task,
+                object_label=object_label,
+                site_names=site_names,
+                task_text=task_text,
+                left_image=left_path,
+                right_image=right_path,
+                head_pos=head_pos,
+                head_quat=head_quat,
+            )
 
-                print(
-                    f"[AffordanceRun] Processing pair {idx}: "
-                    f"{left_path.name} / {right_path.name}"
-                )
-                left_image, right_image = load_stereo_pair(left_path, right_path)
-                try:
-                    prediction = predictor.predict(
-                        left_image=left_image,
-                        right_image=right_image,
-                        robot_name=robot_variant,
-                        site_names=site_names,
-                        is_wiping=is_wiping,
-                        output_dir=str(output_dir),
-                        object_label=object_label,
-                    )
-                except TimeoutError as exc:
-                    print(f"[AffordanceRun] Prediction timed out: {exc}")
-                    continue
-                except Exception as exc:
-                    print(f"[AffordanceRun] Prediction failed: {exc}")
-                    continue
-
-                if prediction is None:
-                    if is_wiping and predictor.last_wiping_done:
-                        print(
-                            "[AffordanceRun] Wiping appears complete; no trajectory planned."
-                        )
-                    else:
-                        print("[AffordanceRun] Predictor returned no contact points.")
-                    continue
-
-                contact_points_3d, contact_normals = prediction
-                planned_sites = list(contact_points_3d.keys())
-                pose_cur = {
-                    site_name: np.zeros(6, dtype=np.float32)
-                    for site_name in planned_sites
-                }
-                trajectory = plan_end_effector_poses(
-                    contact_points_camera=contact_points_3d,
-                    contact_normals_camera=contact_normals,
-                    head_position_world=head_pos,
-                    head_quaternion_world_wxyz=head_quat,
-                    tangent_pos_stiffness=tangent_pos_stiffness,
-                    normal_pos_stiffness=normal_pos_stiffness,
-                    tangent_rot_stiffness=tangent_rot_stiffness,
-                    normal_rot_stiffness=normal_rot_stiffness,
-                    contact_force=np.asarray(contact_force, dtype=np.float32),
-                    pose_cur=pose_cur,
-                    output_dir=str(output_dir),
-                    tool=tool,
+            print(
+                f"[AffordanceRun] Processing pair {idx}: "
+                f"{left_path.name} / {right_path.name}"
+            )
+            left_image, right_image = load_stereo_pair(left_path, right_path)
+            try:
+                prediction = predictor.predict(
+                    left_image=left_image,
+                    right_image=right_image,
                     robot_name=robot_variant,
+                    site_names=site_names,
+                    is_wiping=is_wiping,
+                    output_dir=str(output_dir),
+                    object_label=object_label,
                 )
-                print(
-                    f"[AffordanceRun] Planned trajectory for sites: {list(trajectory.keys())}"
-                )
-                plot_prediction_results(output_dir)
-        finally:
-            predictor.close()
+            except TimeoutError as exc:
+                print(f"[AffordanceRun] Prediction timed out: {exc}")
+                continue
+            except Exception as exc:
+                print(f"[AffordanceRun] Prediction failed: {exc}")
+                continue
+
+            if prediction is None:
+                if is_wiping and predictor.last_wiping_done:
+                    print(
+                        "[AffordanceRun] Wiping appears complete; no trajectory planned."
+                    )
+                else:
+                    print("[AffordanceRun] Predictor returned no contact points.")
+                continue
+
+            contact_points_3d, contact_normals = prediction
+            planned_sites = list(contact_points_3d.keys())
+            pose_cur = {
+                site_name: np.zeros(6, dtype=np.float32) for site_name in planned_sites
+            }
+            trajectory = plan_end_effector_poses(
+                contact_points_camera=contact_points_3d,
+                contact_normals_camera=contact_normals,
+                head_position_world=head_pos,
+                head_quaternion_world_wxyz=head_quat,
+                tangent_pos_stiffness=tangent_pos_stiffness,
+                normal_pos_stiffness=normal_pos_stiffness,
+                tangent_rot_stiffness=tangent_rot_stiffness,
+                normal_rot_stiffness=normal_rot_stiffness,
+                contact_force=np.asarray(contact_force, dtype=np.float32),
+                pose_cur=pose_cur,
+                output_dir=str(output_dir),
+                tool=tool,
+                robot_name=robot_variant,
+            )
+            print(
+                f"[AffordanceRun] Planned trajectory for sites: {list(trajectory.keys())}"
+            )
+            plot_prediction_results(output_dir)
+    finally:
+        predictor.close()
 
 
 if __name__ == "__main__":

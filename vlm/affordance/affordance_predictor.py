@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 import open3d as o3d
 import pycocotools.mask as mask_util
+import yaml
 import zmq
 
 from ..depth.depth_utils import depth_to_xyzmap, to_o3d_cloud, vis_disparity
@@ -43,11 +44,11 @@ DEFAULT_TASK = "wipe up the black ink on the whiteboard with an eraser."
 
 
 _THIS_DIR = Path(__file__).resolve().parent
-_DEFAULT_DEPTH_PARAMS_DIR = _THIS_DIR.parent / "depth" / "params"
+_REPO_ROOT = _THIS_DIR.parents[1]
+_DEFAULT_CAMERA_CONFIG = _REPO_ROOT / "assets" / "toddlerbot_camera.yml"
 
 DEPTH_CONFIG = {
-    "calib_params": str(_DEFAULT_DEPTH_PARAMS_DIR / "calibration.pkl"),
-    "rec_params": str(_DEFAULT_DEPTH_PARAMS_DIR / "rectification.npz"),
+    "camera_config": str(_DEFAULT_CAMERA_CONFIG),
     "calib_height": 480,
     "calib_width": 640,
     "zmax": 0.5,
@@ -97,6 +98,34 @@ class ZMQClient:
     receiver: ZMQNode
     lock: Lock
     poller: zmq.Poller
+
+
+def _to_numpy_fields(mapping: Dict[str, Any]) -> Dict[str, Any]:
+    converted: Dict[str, Any] = {}
+    for key, value in mapping.items():
+        if isinstance(value, list):
+            converted[key] = np.asarray(value, dtype=np.float64)
+        else:
+            converted[key] = value
+    return converted
+
+
+def _load_camera_config_params(
+    camera_config_path: Union[str, Path],
+) -> tuple[dict, dict]:
+    config_path = Path(camera_config_path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Missing camera config: {config_path}")
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Camera config must be a mapping: {config_path}")
+    calibration = data.get("calibration")
+    rectification = data.get("rectification")
+    if not isinstance(calibration, dict) or not isinstance(rectification, dict):
+        raise ValueError(
+            f"Camera config must include mapping keys 'calibration' and 'rectification': {config_path}"
+        )
+    return _to_numpy_fields(calibration), _to_numpy_fields(rectification)
 
 
 def merge_point_cloud(
@@ -930,17 +959,23 @@ class AffordancePredictor:
         self.sam3_ports = tuple(sam3_ports)
         self.sam3_timeout = sam3_timeout
 
-        calib_params_path = self.depth_config.get("calib_params")
-        rec_params_path = self.depth_config.get("rec_params")
+        camera_config = self.depth_config.get("camera_config")
+        calib_params_raw = self.depth_config.get("calib_params")
+        rec_params_raw = self.depth_config.get("rec_params")
         calib_width = int(self.depth_config.get("calib_width", 640))
         calib_height = int(self.depth_config.get("calib_height", 480))
-        if not calib_params_path or not rec_params_path:
-            raise ValueError("Depth configuration missing calibration parameter paths")
-
-        with open(calib_params_path, "rb") as f:
-            self.calib_params: Dict[str, Any] = pickle.load(f)
-        with open(rec_params_path, "rb") as f:
-            self.rec_params: Dict[str, Any] = pickle.load(f)
+        if camera_config:
+            self.calib_params, self.rec_params = _load_camera_config_params(
+                camera_config
+            )
+        elif isinstance(calib_params_raw, dict) and isinstance(rec_params_raw, dict):
+            self.calib_params = _to_numpy_fields(calib_params_raw)
+            self.rec_params = _to_numpy_fields(rec_params_raw)
+        else:
+            raise ValueError(
+                "Depth configuration requires either 'camera_config' (YAML path) "
+                "or inline mappings for 'calib_params' and 'rec_params'."
+            )
 
         self.intrinsic_matrix = self.rec_params["P1"]
         self.rectifier = Rectifier(

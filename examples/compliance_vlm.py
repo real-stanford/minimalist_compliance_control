@@ -12,7 +12,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import cv2
 import gin
+import joblib
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
@@ -25,43 +27,10 @@ from minimalist_compliance_control.controller import (
 )
 from minimalist_compliance_control.wrench_estimation import WrenchEstimateConfig
 from real_world.camera import Camera
-
+from vlm.affordance.affordance_predictor import AffordancePredictor
+from vlm.affordance.plan_ee_pose import plan_end_effector_poses
+from vlm.utils.comm_utils import ZMQNode
 from vlm.utils.math_utils import ensure_matrix, get_damping_matrix
-
-try:
-    import joblib
-except ModuleNotFoundError as exc:  # pragma: no cover
-    joblib = None  # type: ignore[assignment]
-    _JOBLIB_IMPORT_ERROR = exc
-else:
-    _JOBLIB_IMPORT_ERROR = None
-
-try:
-    from vlm.utils.comm_utils import ZMQNode
-except Exception as exc:  # pragma: no cover
-    ZMQNode = None  # type: ignore[assignment]
-    _ZMQ_IMPORT_ERROR = exc
-else:
-    _ZMQ_IMPORT_ERROR = None
-
-try:
-    import cv2
-except ModuleNotFoundError as exc:  # pragma: no cover
-    cv2 = None  # type: ignore[assignment]
-    _CV2_IMPORT_ERROR = exc
-else:
-    _CV2_IMPORT_ERROR = None
-
-try:
-    from vlm.affordance.affordance_predictor import AffordancePredictor
-    from vlm.affordance.plan_ee_pose import plan_end_effector_poses
-except Exception as exc:  # pragma: no cover
-    AffordancePredictor = None  # type: ignore[assignment]
-    plan_end_effector_poses = None  # type: ignore[assignment]
-    _AFFORDANCE_IMPORT_ERROR = exc
-else:
-    _AFFORDANCE_IMPORT_ERROR = None
-
 
 LEAP_DRAW_POS = np.array(
     [2.23, 0, 0, 0.4, 2.23, 0, 0, 0.4, 2.23, 0, 0, 0.4, 0.0, -1.57, 0.0, 0.0],
@@ -387,43 +356,32 @@ class ComplianceVLMPolicy:
         self.mode_control_port = int(mode_control_port)
         self.mode_control_receiver: Optional[ZMQNode] = None
         if enable_mode_control:
-            if ZMQNode is None:
-                print(
-                    "[ComplianceVLM] Warning: mode control receiver disabled "
-                    f"({_ZMQ_IMPORT_ERROR})."
-                )
-            else:
-                try:
-                    self.mode_control_receiver = ZMQNode(
-                        type="receiver", port=self.mode_control_port
-                    )
-                    print(
-                        f"[ComplianceVLM] Mode control listening on port {self.mode_control_port} (w=wipe, d=draw)."
-                    )
-                except Exception as exc:
-                    self.mode_control_receiver = None
-                    print(
-                        f"[ComplianceVLM] Warning: mode control receiver disabled: {exc}"
-                    )
-
-        self.predictor: Optional[AffordancePredictor] = None
-        if AffordancePredictor is None:
-            print(
-                "[ComplianceVLM] Warning: affordance modules unavailable "
-                f"({_AFFORDANCE_IMPORT_ERROR}). Prediction-dependent modes will not run."
-            )
-        else:
             try:
-                self.predictor = AffordancePredictor(
-                    provider=predictor_provider,
-                    model=predictor_model,
+                self.mode_control_receiver = ZMQNode(
+                    type="receiver", port=self.mode_control_port
+                )
+                print(
+                    f"[ComplianceVLM] Mode control listening on port {self.mode_control_port} (w=wipe, d=draw)."
                 )
             except Exception as exc:
-                self.predictor = None
-                print(
-                    "[ComplianceVLM] Warning: affordance predictor unavailable "
-                    f"({exc}). Prediction-dependent modes will not run."
-                )
+                self.mode_control_receiver = None
+                print(f"[ComplianceVLM] Warning: mode control receiver disabled: {exc}")
+
+        self.predictor: Optional[AffordancePredictor] = None
+        try:
+            camera_robot = "leap" if "leap" in lower_name else "toddlerbot"
+            camera_config_path = Path("assets") / f"{camera_robot}_camera.yml"
+            self.predictor = AffordancePredictor(
+                provider=predictor_provider,
+                model=predictor_model,
+                depth_config={"camera_config": str(camera_config_path)},
+            )
+        except Exception as exc:
+            self.predictor = None
+            print(
+                "[ComplianceVLM] Warning: affordance predictor unavailable "
+                f"({exc}). Prediction-dependent modes will not run."
+            )
 
         self.refresh_fixed_trajectory_flag()
 
@@ -632,15 +590,6 @@ class ComplianceVLMPolicy:
         self.start_video_capture_thread()
 
     def ensure_video_writer(self, frame: np.ndarray) -> bool:
-        if cv2 is None:
-            if self.video_logging_active:
-                print(
-                    "[ComplianceVLM] Warning: video logging disabled; "
-                    f"missing dependency: {_CV2_IMPORT_ERROR}"
-                )
-            self.video_logging_active = False
-            return False
-
         if self.video_writer is not None:
             return True
 
@@ -758,9 +707,6 @@ class ComplianceVLMPolicy:
         self.start_video_logging()
 
     def export_camera_video(self, output_dir: Path) -> None:
-        if cv2 is None:
-            return
-
         self.stop_video_capture_thread()
         if self.video_writer is not None:
             self.video_writer.release()
@@ -909,7 +855,7 @@ class ComplianceVLMPolicy:
         pose_cur: Dict[str, np.ndarray],
         is_wiping: bool,
     ) -> Optional[Dict[str, Tuple[np.ndarray, ...]]]:
-        if self.predictor is None or plan_end_effector_poses is None:
+        if self.predictor is None:
             return None
 
         self.args_payload["head_position"] = head_pos.tolist()
@@ -960,15 +906,6 @@ class ComplianceVLMPolicy:
         )
 
     def prepare_fixed_plan(self, inp: ComplianceVLMInput) -> bool:
-        if plan_end_effector_poses is None:
-            return False
-        if joblib is None:
-            print(
-                "[ComplianceVLM] Warning: fixed trajectory unavailable; "
-                f"missing dependency: {_JOBLIB_IMPORT_ERROR}"
-            )
-            return False
-
         path = self.get_fixed_trajectory_path()
         if path is None or not path.exists():
             self.use_fixed_trajectory = False

@@ -20,10 +20,10 @@ export GOOGLE_API_KEY=...
 # or export OPENAI_API_KEY=...
 ```
 
-Place depth calibration files in `vlm/depth/params/`:
+Place robot camera config YAMLs in `assets/`:
 
-- `calibration.pkl`
-- `rectification.npz`
+- `toddlerbot_camera.yml`
+- `leap_camera.yml`
 
 Replay mode:
 

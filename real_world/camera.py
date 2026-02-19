@@ -1,7 +1,6 @@
 """Camera interface module for stereo capture and streaming."""
 
 import os
-import pickle
 import subprocess
 import sys
 import threading
@@ -15,8 +14,6 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _ASSETS_DIR = _REPO_ROOT / "assets"
-_LEGACY_CAMERA_CONFIG_PATH = Path(__file__).resolve().with_name("camera.yml")
-_LEGACY_CALIBRATION_PATH = Path(__file__).resolve().with_name("calibration.pkl")
 
 
 def normalize_robot_name(robot: str) -> str:
@@ -42,19 +39,11 @@ def load_robot_camera_config(
 ) -> tuple[dict, Path]:
     config_path = resolve_camera_config_path(robot, config_override=config_override)
     if not config_path.exists():
-        if _LEGACY_CAMERA_CONFIG_PATH.exists():
-            print(
-                f"Camera config not found: {config_path}. "
-                f"Falling back to legacy config: {_LEGACY_CAMERA_CONFIG_PATH}",
-                file=sys.stderr,
-            )
-            config_path = _LEGACY_CAMERA_CONFIG_PATH
-        else:
-            print(
-                f"Camera config not found: {config_path} (using device defaults)",
-                file=sys.stderr,
-            )
-            return {}, config_path
+        print(
+            f"Camera config not found: {config_path} (using device defaults)",
+            file=sys.stderr,
+        )
+        return {}, config_path
 
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
@@ -120,19 +109,6 @@ def load_intrinsics_from_config(robot: str, side: str) -> np.ndarray:
                 f"Calibration matrix {matrix_key} must be 3x3 in {config_path}"
             )
         return intrinsics
-
-    calibration_path = Path(
-        os.environ.get("MCC_CAMERA_CALIB", str(_LEGACY_CALIBRATION_PATH))
-    )
-    if calibration_path.exists():
-        with open(calibration_path, "rb") as f:
-            calib_params = pickle.load(f)
-        legacy_intrinsics = np.asarray(
-            calib_params["K1"] if side == "left" else calib_params["K2"],
-            dtype=np.float32,
-        )
-        if legacy_intrinsics.shape == (3, 3):
-            return legacy_intrinsics
 
     return np.eye(3, dtype=np.float32)
 
