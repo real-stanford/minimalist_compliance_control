@@ -285,6 +285,7 @@ CANDIDATE CONTACT POINTS (pixel coordinates), grouped by site:
 
 ACTION REQUIREMENTS:
 - Output an ordered list of waypoints (pixel coordinates) for each site to traverse the target region. The waypoint list should define a single continuous path that sweeps through the marked region without leaving any major sub-region uncovered. Focus on path topology → coverage order, direction changes, sub-region transitions. We will densify/expand the path later using a cubic Hermite interpolation routine. Your job is only to choose the meaningful keyframes.
+- Assume a small contact patch (not a large eraser): start each stroke slightly outside/upstream of the target along the motion direction (e.g., start slightly left if the next motion wipes right), then sweep through the region.
 
 OUTPUT JSON FORMAT:
 {json_lines}

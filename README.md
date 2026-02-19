@@ -61,6 +61,18 @@ For SAM3 installation, follow the official instructions from:
 
 - https://github.com/facebookresearch/sam3
 
+## API Key
+
+When using the Gemini-backed affordance/compliance pipeline, set:
+
+- `GOOGLE_API_KEY`
+
+Example:
+
+```bash
+export GOOGLE_API_KEY="your_api_key_here"
+```
+
 ## Core Modules
 
 - `minimalist_compliance_control/wrench_sim.py`

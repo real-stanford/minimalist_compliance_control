@@ -17,7 +17,6 @@ TODDY_LEFT_CAMERA_POSITION: npt.NDArray[np.float32] = np.array(
 TODDY_LEFT_CAMERA_EULER: npt.NDArray[np.float32] = np.array(
     [-np.pi / 2, 0.0, -np.pi / 2], dtype=np.float32
 )
-# TODO: Tune this offset
 TODDY_LEFT_CAMERA_EULER = (
     (
         R.from_euler("xyz", TODDY_LEFT_CAMERA_EULER)
@@ -37,11 +36,10 @@ LEAP_LEFT_CAMERA_POSITION: npt.NDArray[np.float32] = np.array(
 LEAP_LEFT_CAMERA_EULER: npt.NDArray[np.float32] = np.array(
     [0, np.pi, np.pi / 2], dtype=np.float32
 )
-# TODO: Tune this offset
 LEAP_LEFT_CAMERA_EULER = (
     (
         R.from_euler("xyz", LEAP_LEFT_CAMERA_EULER)
-        * R.from_euler("yx", [6 / 180 * np.pi, 0 / 180 * np.pi])
+        * R.from_euler("yx", [5 / 180 * np.pi, 0 / 180 * np.pi])
     )
     .as_euler("xyz")
     .astype(np.float32)

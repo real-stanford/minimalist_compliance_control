@@ -19,14 +19,14 @@ import open3d as o3d
 import pycocotools.mask as mask_util
 import zmq
 
+from ..depth.depth_utils import depth_to_xyzmap, to_o3d_cloud, vis_disparity
+from ..depth.rectifier import Rectifier
+from ..utils.comm_utils import ZMQNode
 from .compliance_predictor import CompliancePredictor
 from .plan_ee_pose import (
     LEAP_CAMERA_EXTRINSICS,
     TODDY_CAMERA_EXTRINSICS,
 )
-from ..depth.depth_utils import depth_to_xyzmap, to_o3d_cloud, vis_disparity
-from ..depth.rectifier import Rectifier
-from ..utils.comm_utils import ZMQNode
 
 # from toddlerbot.utils.misc_utils import profile
 
@@ -39,7 +39,7 @@ DEFAULT_SAM3_PORTS: Tuple[int, int] = (5580, 5581)
 DEFAULT_SAM3_TIMEOUT = 5.0
 MIN_MASK_PIXELS = 200
 MAX_MASK_CENTER_DISTANCE_FRAC = 1.0
-DEFAULT_TASK = "wipe up the mark on the whiteboard with an eraser."
+DEFAULT_TASK = "wipe up the black ink on the whiteboard with an eraser."
 
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -242,7 +242,9 @@ def postprocess_sam_result(
     bbox = None
     if ys.size > 0 and xs.size > 0:
         bbox = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
-    if selected.get("bbox") is not None:
+    # Prefer bbox derived from the merged selected mask. Raw model boxes can
+    # represent only one component/proposal and may under-cover the target.
+    if bbox is None and selected.get("bbox") is not None:
         bbox = selected["bbox"]
 
     score = float(np.mean(selected["scores"])) if selected["scores"] else None
@@ -1249,7 +1251,7 @@ class AffordancePredictor:
         )
 
         if is_wiping:
-            segmentation_target = object_label_str
+            segmentation_target = object_label_str + ".whiteboard.vase"
         else:
             segmentation_target = "whiteboard.vase"
 
@@ -1319,7 +1321,7 @@ class AffordancePredictor:
                 rectified_left.shape[:2],
                 site_names,
                 grid_size=20,
-                bbox_padding=1,
+                bbox_padding=2,
             )
             depth_result = None
             compliance_image = rectified_left
