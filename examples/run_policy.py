@@ -160,7 +160,7 @@ def _parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, list[str]]:
         )
     parser.add_argument(
         "--robot",
-        choices=["toddlerbot", "leap"],
+        choices=["toddlerbot", "leap", "arx"],
         required=True,
         help="Robot target.",
     )
@@ -176,6 +176,32 @@ def _parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, list[str]]:
         args = parser.parse_args(raw[:split_idx])
         return args, raw[split_idx + 1 :]
     return parser.parse_known_args(raw)
+
+
+def _validate_policy_support(args: argparse.Namespace) -> None:
+    robot = str(args.robot)
+    policy = str(args.policy)
+    sim = str(args.sim)
+
+    if robot == "arx" and policy != "compliance":
+        raise ValueError(
+            "Unsupported combination: --robot arx only supports --policy compliance."
+        )
+
+    if robot == "leap" and policy not in {
+        "compliance",
+        "compliance_model_based",
+        "compliance_vlm",
+    }:
+        raise ValueError(
+            "Unsupported combination: --robot leap supports policies "
+            "{compliance, compliance_model_based, compliance_vlm}."
+        )
+
+    if policy in {"compliance_dp", "compliance_vlm"} and sim != "real":
+        raise ValueError(
+            f"Unsupported combination: --policy {policy} only supports --sim real."
+        )
 
 
 def _run_compliance(args: argparse.Namespace) -> None:
@@ -258,22 +284,25 @@ def _build_sim(policy: Any, args: argparse.Namespace) -> Any:
             model = impl.model
             data = impl.data
         else:
-            cfg_paths = _get_motor_config_paths(policy)
-            if cfg_paths is None:
-                raise ValueError("Missing motor config paths for simulation setup.")
-            default_config_path, robot_config_path, motors_config_path = cfg_paths
-            motor_params = load_motor_params(
-                model=policy.model,
-                default_config_path=default_config_path,
-                robot_config_path=robot_config_path,
-                motors_config_path=motors_config_path,
-            )
-            substep_control = build_clamped_torque_substep_control(
-                qpos_adr=policy.qpos_adr,
-                qvel_adr=policy.qvel_adr,
-                motor_params=motor_params,
-                target_motor_pos_getter=lambda: policy.target_motor_pos,
-            )
+            if str(args.robot) == "arx":
+                substep_control = None
+            else:
+                cfg_paths = _get_motor_config_paths(policy)
+                if cfg_paths is None:
+                    raise ValueError("Missing motor config paths for simulation setup.")
+                default_config_path, robot_config_path, motors_config_path = cfg_paths
+                motor_params = load_motor_params(
+                    model=policy.model,
+                    default_config_path=default_config_path,
+                    robot_config_path=robot_config_path,
+                    motors_config_path=motors_config_path,
+                )
+                substep_control = build_clamped_torque_substep_control(
+                    qpos_adr=policy.qpos_adr,
+                    qvel_adr=policy.qvel_adr,
+                    motor_params=motor_params,
+                    target_motor_pos_getter=lambda: policy.target_motor_pos,
+                )
             if hasattr(policy, "force_site_ids"):
                 policy.site_force_applier = build_site_force_applier(
                     model=policy.model,
@@ -421,6 +450,7 @@ def _run_tick_loop(policy: Any, sim: Any, args: argparse.Namespace) -> None:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args, remainder = _parse_args(sys.argv[1:] if argv is None else argv)
+    _validate_policy_support(args)
 
     if args.policy == "compliance":
         _run_compliance(args)

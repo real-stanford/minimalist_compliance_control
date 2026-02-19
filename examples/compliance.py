@@ -57,7 +57,12 @@ class CompliancePolicy:
         self.repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         os.chdir(self.repo_root)
 
-        config_name = "leap.gin" if self.robot == "leap" else "toddlerbot.gin"
+        if self.robot == "leap":
+            config_name = "leap.gin"
+        elif self.robot == "arx":
+            config_name = "arx.gin"
+        else:
+            config_name = "toddlerbot.gin"
         config_path = os.path.join(self.repo_root, "config", config_name)
         gin.clear_config()
         gin.parse_config_file(config_path)

@@ -1,0 +1,45 @@
+# Minimal compliance config for ARX arm (fixed base, single EE site)
+
+# Wrench simulation
+WrenchSimConfig.xml_path = "descriptions/arx_arm/arx_arm_fixed.xml"
+WrenchSimConfig.site_names = ("ee_site",)
+WrenchSimConfig.fixed_base = True
+WrenchSimConfig.view = True
+WrenchSimConfig.render = False
+
+# Controller config
+ControllerConfig.xml_path = "descriptions/arx_arm/arx_arm_fixed.xml"
+ControllerConfig.site_names = ("ee_site",)
+ControllerConfig.fixed_base = True
+ControllerConfig.joint_indices_by_site = None
+ControllerConfig.motor_indices_by_site = None
+ControllerConfig.gear_ratios_by_site = None
+ControllerConfig.base_body_name = ""
+ControllerConfig.motor_torque_ema_alpha = 0.1
+
+# Wrench estimation
+WrenchEstimateConfig.force_reg = 1e-3
+WrenchEstimateConfig.torque_reg = 1e-2
+WrenchEstimateConfig.force_only = False
+WrenchEstimateConfig.axis_aligned = False
+WrenchEstimateConfig.normal_axis = "+z"
+
+# Compliance reference (fixed base)
+ComplianceRefConfig.dt = 0.02
+ComplianceRefConfig.q_start_idx = 0
+ComplianceRefConfig.qd_start_idx = 0
+ComplianceRefConfig.ik_position_only = False
+ComplianceRefConfig.fixed_model_xml_path = "descriptions/arx_arm/arx_arm_fixed.xml"
+ComplianceRefConfig.mass = 1.0
+ComplianceRefConfig.inertia_diag = (1.0, 1.0, 1.0)
+ComplianceRefConfig.mink_num_iter = 1
+ComplianceRefConfig.mink_damping = 0.1
+
+# Runner config
+RunnerConfig.kp_pos = 100.0
+RunnerConfig.kp_rot = 10.0
+
+# Motor config paths
+MotorConfigPaths.default_config_path = "descriptions/default.yml"
+MotorConfigPaths.robot_config_path = "descriptions/arx_arm/robot.yml"
+MotorConfigPaths.motors_config_path = None
