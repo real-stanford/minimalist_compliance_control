@@ -1,3 +1,6 @@
+ckpts/
+results/
+
 # Python cache / build artifacts
 .vscode/
 __pycache__/
@@ -15,5 +18,3 @@ pip-wheel-metadata/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-ckpts/
-results/
