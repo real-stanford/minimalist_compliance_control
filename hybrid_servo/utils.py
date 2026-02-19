@@ -129,7 +129,7 @@ OBJECT_MASS_MAP = {
         "init_pos": np.array([-0.13, -0.08, 0.145], dtype=np.float32),
         "init_quat": np.array([0.70710677, 0.70710677, 0.0, 0.0], dtype=np.float32),
         "min_normal_force_rotation": 8.0,
-        "min_normal_force_translation": 5.0,
+        "min_normal_force_translation": 3.0,
         "geom_size": np.array([0.04, 0.12], dtype=np.float32),  # [radius, half_height]
     },
     "pen": {
@@ -402,6 +402,9 @@ def _leap_init(
     policy._debug_rotate_enter_thumb_site_pos: Optional[np.ndarray] = None
     policy._debug_last_thumb_cmd_pos: Optional[np.ndarray] = None
     policy._debug_last_thumb_site_pos: Optional[np.ndarray] = None
+
+    # Mode-switch debug (disabled by default).
+    policy.debug_mode_switch = False
 
 
 def _leap_build_pose_command(
@@ -711,6 +714,8 @@ def _leap_update_goal(policy, time_curr: float) -> None:
     - When reaching threshold, sets velocity to 0
     - Pressing 'c' reverses direction to move toward reverse threshold
     """
+    debug_mode_switch = bool(getattr(policy, "debug_mode_switch", False))
+
     # Initialize integration timer on first call during rotate phase
     if policy.last_integration_time is None:
         policy.last_integration_time = time_curr
@@ -718,6 +723,8 @@ def _leap_update_goal(policy, time_curr: float) -> None:
     # Calculate dt for integration
     dt = time_curr - policy.last_integration_time
     policy.last_integration_time = time_curr
+    prev_integrated_angle = float(policy.integrated_angle)
+    prev_integrated_position = float(policy.integrated_position)
 
     # Dwell after close->rotate contact trigger: zero commanded motion for a short window.
     if not bool(getattr(policy, "rotate_wait_released", True)):
@@ -772,8 +779,17 @@ def _leap_update_goal(policy, time_curr: float) -> None:
 
     if policy.mode_switch_pending:
         at_zero = False
+        direction = 0.0
+        zero_crossed = False
         if policy.control_mode == "rotation":
-            at_zero = abs(policy.integrated_angle) < policy.return_to_zero_tolerance
+            zero_crossed = (
+                prev_integrated_angle * float(policy.integrated_angle) <= 0.0
+                and abs(prev_integrated_angle - float(policy.integrated_angle)) > 0.0
+            )
+            at_zero = (
+                abs(policy.integrated_angle) < policy.return_to_zero_tolerance
+                or zero_crossed
+            )
             if not at_zero:
                 direction = -np.sign(policy.integrated_angle)
                 if direction == 0:
@@ -782,7 +798,15 @@ def _leap_update_goal(policy, time_curr: float) -> None:
                     [0.0, 0.0, direction * policy.rotation_angvel_magnitude]
                 )
         else:
-            at_zero = abs(policy.integrated_position) < policy.return_to_zero_tolerance
+            zero_crossed = (
+                prev_integrated_position * float(policy.integrated_position) <= 0.0
+                and abs(prev_integrated_position - float(policy.integrated_position))
+                > 0.0
+            )
+            at_zero = (
+                abs(policy.integrated_position) < policy.return_to_zero_tolerance
+                or zero_crossed
+            )
             if not at_zero:
                 direction = -np.sign(policy.integrated_position)
                 if direction == 0:
@@ -791,6 +815,27 @@ def _leap_update_goal(policy, time_curr: float) -> None:
                     [direction * policy.translation_linvel_magnitude, 0.0, 0.0]
                 )
 
+        if debug_mode_switch:
+            if policy.control_mode == "rotation":
+                metric = float(policy.integrated_angle)
+                cmd_vel = float(policy.target_rotation_angvel[2])
+            else:
+                metric = float(policy.integrated_position)
+                cmd_vel = float(policy.target_rotation_linvel[0])
+            print(
+                "[leaphand][mode_switch] "
+                f"t={float(time_curr):.3f} "
+                "event=pending_check "
+                f"mode={policy.control_mode} "
+                f"target_mode={policy.target_mode} "
+                f"metric={metric:.6f} "
+                f"tol={float(policy.return_to_zero_tolerance):.6f} "
+                f"cmd_vel={cmd_vel:.6f} "
+                f"direction={float(direction):.1f} "
+                f"zero_crossed={int(zero_crossed)} "
+                f"at_zero={int(at_zero)}"
+            )
+
         if at_zero:
             policy.mode_switch_pending = False
             # Reset pose_command to target pose to avoid drift
@@ -798,10 +843,11 @@ def _leap_update_goal(policy, time_curr: float) -> None:
             print(
                 "[LeapRotateCompliance] Reset pose_command to target_pose_command to prevent drift"
             )
+            policy.integrated_angle = 0.0
+            policy.integrated_position = 0.0
 
             if policy.target_mode == "translation":
                 policy.control_mode = "translation"
-                policy.integrated_position = 0.0
                 policy.target_rotation_angvel = np.array([0.0, 0.0, 0.0])
                 policy.target_rotation_linvel = np.array(
                     [policy.translation_linvel_magnitude, 0.0, 0.0]
@@ -811,7 +857,6 @@ def _leap_update_goal(policy, time_curr: float) -> None:
                 )
             else:
                 policy.control_mode = "rotation"
-                policy.integrated_angle = 0.0
                 policy.target_rotation_linvel = np.array([0.0, 0.0, 0.0])
                 policy.target_rotation_angvel = np.array(
                     [0.0, 0.0, policy.rotation_angvel_magnitude]
@@ -868,6 +913,18 @@ def _leap_update_goal(policy, time_curr: float) -> None:
                 )
                 print(
                     f"[LeapRotateCompliance] Reached threshold: position = {policy.integrated_position:.3f}, stopped"
+                )
+            if debug_mode_switch:
+                print(
+                    "[leaphand][mode_switch] "
+                    f"t={float(time_curr):.3f} "
+                    "event=threshold_stop "
+                    f"mode={policy.control_mode} "
+                    f"metric={float(current_metric):.6f} "
+                    f"active_threshold={float(active_threshold):.6f} "
+                    f"moving_outward={int(moving_outward)} "
+                    f"just_reached_limit={int(just_reached_limit)} "
+                    f"auto_counter={int(policy.auto_switch_counter)}"
                 )
             _leap_auto_switch_target(policy, just_reached_limit)
 
@@ -930,6 +987,15 @@ def _leap_auto_switch_target(policy, just_reached_limit: bool) -> None:
         return
 
     action_type = policy.auto_switch_counter % 2  # 0=reverse, 1=mode_switch
+    if bool(getattr(policy, "debug_mode_switch", False)):
+        action_name = "reverse" if action_type == 0 else "mode_switch"
+        print(
+            "[leaphand][mode_switch] "
+            f"t={float(policy.wrench_sim.data.time):.3f} "
+            "event=auto_switch "
+            f"action={action_name} "
+            f"counter={int(policy.auto_switch_counter)}"
+        )
     if action_type == 0:
         _leap_apply_reverse_command(
             policy,

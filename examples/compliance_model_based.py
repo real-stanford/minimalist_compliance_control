@@ -165,6 +165,11 @@ class LeapModelBasedPolicy:
         self.args = args
         self.vis = bool(vis)
         self.repo_root = _find_repo_root(os.path.abspath(os.path.dirname(__file__)))
+        # Load LEAP gin so MinkIK site-specific orientation costs are actually bound.
+        gin.clear_config()
+        gin.parse_config_file(
+            os.path.join(self.repo_root, "config", "leap.gin"), skip_unknown=True
+        )
 
         if args.scene_xml:
             scene_xml_path = os.path.abspath(args.scene_xml)
@@ -454,7 +459,6 @@ class LeapModelBasedPolicy:
                     sim_name="sim",
                     is_real_world=False,
                 )
-            self._print_thumb_xref_and_real(sim_time)
             policy_out = {
                 "pose_command": np.asarray(
                     self.policy.pose_command, dtype=np.float32
