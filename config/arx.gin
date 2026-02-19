@@ -1,14 +1,14 @@
 # Minimal compliance config for ARX arm (fixed base, single EE site)
 
 # Wrench simulation
-WrenchSimConfig.xml_path = "descriptions/arx_arm/arx_arm_fixed.xml"
+WrenchSimConfig.xml_path = "descriptions/arx_arm/scene_fixed.xml"
 WrenchSimConfig.site_names = ("ee_site",)
 WrenchSimConfig.fixed_base = True
 WrenchSimConfig.view = True
 WrenchSimConfig.render = False
 
 # Controller config
-ControllerConfig.xml_path = "descriptions/arx_arm/arx_arm_fixed.xml"
+ControllerConfig.xml_path = "descriptions/arx_arm/scene_fixed.xml"
 ControllerConfig.site_names = ("ee_site",)
 ControllerConfig.fixed_base = True
 ControllerConfig.joint_indices_by_site = None
@@ -38,6 +38,9 @@ ComplianceRefConfig.mink_damping = 0.1
 # Runner config
 RunnerConfig.kp_pos = 100.0
 RunnerConfig.kp_rot = 10.0
+RunnerConfig.initial_pose = (
+    (0.3, 0.0, 0.3, 0.0, 0.0, 0.0),
+)
 
 # Motor config paths
 MotorConfigPaths.default_config_path = "descriptions/default.yml"

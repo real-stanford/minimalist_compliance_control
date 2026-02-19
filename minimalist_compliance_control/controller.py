@@ -300,21 +300,42 @@ class ComplianceController:
         wrenches: Dict[str, npt.NDArray[np.float32]] = {}
         motor_torques_arr = self._smooth_motor_torques(motor_torques)
         bias = self.wrench_sim.bias_torque()
+        actuator_trnid = np.asarray(
+            self.wrench_sim.model.actuator_trnid[:, 0], dtype=np.int32
+        )
+        valid_act = actuator_trnid >= 0
+        default_motor_idx = np.flatnonzero(valid_act).astype(np.int32)
+        default_joint_idx = np.asarray(
+            self.wrench_sim.model.jnt_dofadr[actuator_trnid[valid_act]], dtype=np.int32
+        )
         for site in self.config.site_names:
             jacp, jacr = self.wrench_sim.site_jacobian(site)
+            if self.config.motor_indices_by_site is None:
+                motor_idx = default_motor_idx
+            else:
+                motor_idx = np.asarray(
+                    self.config.motor_indices_by_site[site], dtype=np.int32
+                )
             if self.config.joint_indices_by_site is None:
-                joint_idx = np.arange(self.wrench_sim.model.nv, dtype=np.int32)
+                if self.config.motor_indices_by_site is None:
+                    joint_idx = default_joint_idx
+                else:
+                    trnid_sel = np.asarray(actuator_trnid[motor_idx], dtype=np.int32)
+                    if np.any(trnid_sel < 0):
+                        raise ValueError(
+                            f"Actuator(s) without valid joint mapping in motor_indices_by_site[{site!r}]."
+                        )
+                    joint_idx = np.asarray(
+                        self.wrench_sim.model.jnt_dofadr[trnid_sel], dtype=np.int32
+                    )
             else:
                 joint_idx = np.asarray(
                     self.config.joint_indices_by_site[site], dtype=np.int32
                 )
 
             if self.config.motor_indices_by_site is None:
-                tau_raw = motor_torques_arr
+                tau_raw = motor_torques_arr[motor_idx]
             else:
-                motor_idx = np.asarray(
-                    self.config.motor_indices_by_site[site], dtype=np.int32
-                )
                 gear = (
                     self.config.gear_ratios_by_site.get(site)
                     if self.config.gear_ratios_by_site is not None
@@ -324,9 +345,19 @@ class ComplianceController:
                     tau_raw = motor_torques_arr[motor_idx]
                 else:
                     gear = np.asarray(gear, dtype=np.float32)
+                    if gear.shape[0] != motor_idx.shape[0]:
+                        raise ValueError(
+                            f"gear_ratios_by_site[{site!r}] length {gear.shape[0]} "
+                            f"!= motor_indices length {motor_idx.shape[0]}."
+                        )
                     tau_raw = motor_torques_arr[motor_idx] * gear
 
             tau_bias = bias[joint_idx]
+            if tau_raw.shape[0] != tau_bias.shape[0]:
+                raise ValueError(
+                    f"Shape mismatch at site {site!r}: tau_raw {tau_raw.shape} vs tau_bias {tau_bias.shape}. "
+                    "Check motor_indices_by_site / joint_indices_by_site alignment."
+                )
             tau_ext = -(tau_raw - tau_bias)
 
             site_rot = self.wrench_sim.data.site_xmat[

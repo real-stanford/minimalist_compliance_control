@@ -119,25 +119,28 @@ class CompliancePolicy:
         )
         self.default_state = self.controller.compliance_ref.get_default_state()
 
-        if self.robot == "leap":
-            init_pose_arr = np.asarray(self.runner_cfg.initial_pose, dtype=np.float32)
+        init_pose_arr = np.asarray(self.runner_cfg.initial_pose, dtype=np.float32)
+        has_initial_pose = bool(init_pose_arr.size > 0)
+        if has_initial_pose:
             if init_pose_arr.shape != (self.num_sites, 6):
                 raise ValueError(
                     f"RunnerConfig.initial_pose must be shape ({self.num_sites}, 6), got {init_pose_arr.shape}."
                 )
-            init_pos = init_pose_arr[:, :3]
-            init_ori = init_pose_arr[:, 3:6]
-            init_pose = np.concatenate([init_pos, init_ori], axis=1)
-            self.command_matrix[:, COMMAND_LAYOUT.position] = init_pos
-            self.command_matrix[:, COMMAND_LAYOUT.orientation] = init_ori
+            self.pos_cmd = init_pose_arr[:, :3]
+            self.ori_cmd = init_pose_arr[:, 3:6]
+            init_pose = np.concatenate([self.pos_cmd, self.ori_cmd], axis=1)
+            self.command_matrix[:, COMMAND_LAYOUT.position] = self.pos_cmd
+            self.command_matrix[:, COMMAND_LAYOUT.orientation] = self.ori_cmd
             self.default_state.x_ref = init_pose.copy()
             self.default_state.v_ref = np.zeros_like(self.default_state.v_ref)
             self.default_state.a_ref = np.zeros_like(self.default_state.a_ref)
             self.controller._last_state = self.default_state
-            self.pos_cmd = init_pos
-            self.ori_cmd = init_ori
         else:
             home_pose = np.asarray(self.default_state.x_ref, dtype=np.float32)
+            if home_pose.shape != (self.num_sites, 6):
+                raise ValueError(
+                    f"default x_ref must be shape ({self.num_sites}, 6), got {home_pose.shape}."
+                )
             self.pos_cmd = home_pose[:, :3]
             self.ori_cmd = home_pose[:, 3:6]
             self.command_matrix[:, COMMAND_LAYOUT.position] = self.pos_cmd
