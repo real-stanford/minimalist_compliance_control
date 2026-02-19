@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, Protocol, runtime_checkable
 
 import mujoco
 import mujoco.viewer
@@ -13,7 +13,6 @@ from minimalist_compliance_control.utils import (
     MotorParams,
     compute_clamped_motor_torque,
 )
-from minimalist_compliance_control.wrench_sim import WrenchSim
 
 
 @runtime_checkable
@@ -104,19 +103,19 @@ def build_site_force_applier(
 
 
 class MuJoCoSim:
-    """Thin wrapper around the local WrenchSim MuJoCo state."""
+    """Thin wrapper around MuJoCo model/data state."""
 
     def __init__(
         self,
-        wrench_sim: WrenchSim,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
         control_dt: float,
         sim_dt: float | None = None,
         vis: bool = False,
         substep_control: Callable[[mujoco.MjData], None] | None = None,
     ) -> None:
-        self.wrench_sim = wrench_sim
-        self.model = wrench_sim.model
-        self.data = wrench_sim.data
+        self.model = model
+        self.data = data
         self.name = "mujoco"
         self.vis = bool(vis)
         self.substep_control = substep_control
@@ -139,6 +138,7 @@ class MuJoCoSim:
         self._debug_force_vis_scale = 0.02
         self._debug_site_targets: Dict[str, npt.NDArray[np.float32]] = {}
         self._debug_target_axis_length = 0.04
+        self._site_name_to_id: Dict[str, int] = {}
 
     def step(self) -> None:
         for _ in range(self.n_substeps):
@@ -295,7 +295,12 @@ class MuJoCoSim:
         if not self._debug_site_forces:
             return
         for site_name, force in self._debug_site_forces.items():
-            site_id = self.wrench_sim.site_ids.get(site_name, -1)
+            site_id = self._site_name_to_id.get(site_name)
+            if site_id is None:
+                site_id = int(
+                    mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+                )
+                self._site_name_to_id[site_name] = site_id
             if site_id < 0:
                 continue
             if scene.ngeom >= scene.maxgeom:
@@ -326,12 +331,9 @@ class MuJoCoSim:
             return False
         self._draw_debug_overlays()
         self.viewer.sync()
-        if getattr(self.wrench_sim.config, "render", False):
-            self.wrench_sim.record_frame()
         return True
 
     def close(self) -> None:
         if self.viewer is not None:
             self.viewer.close()
             self.viewer = None
-        self.wrench_sim.close()

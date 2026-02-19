@@ -1242,11 +1242,11 @@ class ComplianceVLMPolicy:
 
     def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
         del sim
-        qpos_obs = np.asarray(obs["qpos"], dtype=np.float32)
+        qpos_obs = np.asarray(obs.qpos, dtype=np.float32)
         self.controller.wrench_sim.set_qpos(qpos_obs)
         self.controller.wrench_sim.forward()
-        left_image = obs.get("left_image", obs.get("image"))
-        right_image = obs.get("right_image", left_image)
+        left_image = obs.left_image if obs.left_image is not None else obs.image
+        right_image = obs.right_image if obs.right_image is not None else left_image
         if left_image is None:
             left = np.zeros(
                 (int(self.args.image_height), int(self.args.image_width), 3),
@@ -1268,7 +1268,7 @@ class ComplianceVLMPolicy:
         x_obs = self._build_x_obs()
         vlm_out = self._step_vlm_core(
             self._vlm_input_cls(
-                time=float(obs.get("time", self.data.time)),
+                time=float(obs.time),
                 x_obs=x_obs,
                 left_image=left,
                 right_image=right,
@@ -1280,7 +1280,7 @@ class ComplianceVLMPolicy:
             raise ValueError(
                 f"VLM command_matrix shape {cmd.shape} != ({self.num_sites}, {COMMAND_LAYOUT.width})"
             )
-        motor_tor_obs = np.asarray(obs["motor_tor"], dtype=np.float32)
+        motor_tor_obs = np.asarray(obs.motor_tor, dtype=np.float32)
         _, state_ref = self.controller.step(
             command_matrix=cmd,
             motor_torques=motor_tor_obs,

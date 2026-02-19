@@ -10,8 +10,10 @@ import os
 import pickle
 import sys
 import time
+from dataclasses import asdict, dataclass, field
 from typing import Any, Sequence
 
+import mujoco
 import numpy as np
 
 from examples.real_world import RealWorld
@@ -33,43 +35,25 @@ def _as_f32_array(value: Any) -> np.ndarray | None:
     return np.asarray(value, dtype=np.float32).copy()
 
 
+@dataclass
 class Obs:
     """Typed observation object shared across all example policies."""
 
-    def __init__(
-        self,
-        *,
-        time_s: float = 0.0,
-        motor_pos: np.ndarray | None = None,
-        motor_vel: np.ndarray | None = None,
-        motor_acc: np.ndarray | None = None,
-        motor_tor: np.ndarray | None = None,
-        qpos: np.ndarray | None = None,
-        qvel: np.ndarray | None = None,
-        motor_cur: np.ndarray | None = None,
-        motor_pwm: np.ndarray | None = None,
-        motor_vin: np.ndarray | None = None,
-        image: np.ndarray | None = None,
-        left_image: np.ndarray | None = None,
-        right_image: np.ndarray | None = None,
-        imu: Any = None,
-        extra: dict[str, Any] | None = None,
-    ) -> None:
-        self.time = float(time_s)
-        self.motor_pos = motor_pos
-        self.motor_vel = motor_vel
-        self.motor_acc = motor_acc
-        self.motor_tor = motor_tor
-        self.qpos = qpos
-        self.qvel = qvel
-        self.motor_cur = motor_cur
-        self.motor_pwm = motor_pwm
-        self.motor_vin = motor_vin
-        self.image = image
-        self.left_image = left_image
-        self.right_image = right_image
-        self.imu = imu
-        self.extra = extra if extra is not None else {}
+    time: float = 0.0
+    motor_pos: np.ndarray | None = None
+    motor_vel: np.ndarray | None = None
+    motor_acc: np.ndarray | None = None
+    motor_tor: np.ndarray | None = None
+    qpos: np.ndarray | None = None
+    qvel: np.ndarray | None = None
+    motor_cur: np.ndarray | None = None
+    motor_pwm: np.ndarray | None = None
+    motor_vin: np.ndarray | None = None
+    image: np.ndarray | None = None
+    left_image: np.ndarray | None = None
+    right_image: np.ndarray | None = None
+    imu: Any = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, mapping: dict[str, Any]) -> "Obs":
@@ -93,7 +77,7 @@ class Obs:
         left_image = mapping.get("left_image")
         right_image = mapping.get("right_image")
         return cls(
-            time_s=float(mapping.get("time", 0.0)),
+            time=float(mapping.get("time", 0.0)),
             motor_pos=_as_f32_array(mapping.get("motor_pos")),
             motor_vel=_as_f32_array(mapping.get("motor_vel")),
             motor_acc=_as_f32_array(mapping.get("motor_acc")),
@@ -119,69 +103,6 @@ class Obs:
             imu=mapping.get("imu"),
             extra={k: v for k, v in mapping.items() if k not in known_keys},
         )
-
-    def get(self, key: str, default: Any = None) -> Any:
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
-    def __contains__(self, key: str) -> bool:
-        try:
-            self[key]
-            return True
-        except KeyError:
-            return False
-
-    def __getitem__(self, key: str) -> Any:
-        if key == "time":
-            return self.time
-        if key == "motor_pos" and self.motor_pos is not None:
-            return self.motor_pos
-        if key == "motor_vel" and self.motor_vel is not None:
-            return self.motor_vel
-        if key == "motor_acc" and self.motor_acc is not None:
-            return self.motor_acc
-        if key == "motor_tor" and self.motor_tor is not None:
-            return self.motor_tor
-        if key == "qpos" and self.qpos is not None:
-            return self.qpos
-        if key == "qvel" and self.qvel is not None:
-            return self.qvel
-        if key == "motor_cur" and self.motor_cur is not None:
-            return self.motor_cur
-        if key == "motor_pwm" and self.motor_pwm is not None:
-            return self.motor_pwm
-        if key == "motor_vin" and self.motor_vin is not None:
-            return self.motor_vin
-        if key == "image" and self.image is not None:
-            return self.image
-        if key == "left_image" and self.left_image is not None:
-            return self.left_image
-        if key == "right_image" and self.right_image is not None:
-            return self.right_image
-        if key == "imu" and self.imu is not None:
-            return self.imu
-        if key in self.extra:
-            return self.extra[key]
-        raise KeyError(key)
-
-    def to_dump_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {
-            "time": float(self.time),
-            "motor_pos": self.motor_pos,
-            "motor_vel": self.motor_vel,
-            "motor_acc": self.motor_acc,
-            "motor_tor": self.motor_tor,
-            "qpos": self.qpos,
-            "qvel": self.qvel,
-            "motor_cur": self.motor_cur,
-            "motor_pwm": self.motor_pwm,
-            "motor_vin": self.motor_vin,
-            "imu": self.imu,
-        }
-        out.update(self.extra)
-        return out
 
 
 def _import_module_any(module_name: str):
@@ -334,7 +255,6 @@ def _build_sim(policy: Any, args: argparse.Namespace) -> Any:
         impl = getattr(policy, "impl", policy)
         if hasattr(policy, "impl"):
             substep_control = impl.substep_control
-            wrench_sim = impl.controller.wrench_sim
             model = impl.model
             data = impl.data
         else:
@@ -359,12 +279,12 @@ def _build_sim(policy: Any, args: argparse.Namespace) -> Any:
                     model=policy.model,
                     site_ids=policy.force_site_ids,
                 )
-            wrench_sim = policy.controller.wrench_sim
             model = policy.model
             data = policy.data
 
         sim = MuJoCoSim(
-            wrench_sim,
+            model=model,
+            data=data,
             control_dt=policy.control_dt,
             sim_dt=float(model.opt.timestep),
             vis=bool(args.vis),
@@ -376,7 +296,7 @@ def _build_sim(policy: Any, args: argparse.Namespace) -> Any:
             and getattr(compliance_ref, "default_qpos", None) is not None
         ):
             data.qpos[:] = np.asarray(compliance_ref.default_qpos, dtype=np.float32)
-            impl.controller.wrench_sim.forward()
+            mujoco.mj_forward(model, data)
         return sim
 
     if hasattr(policy, "impl"):
@@ -385,12 +305,22 @@ def _build_sim(policy: Any, args: argparse.Namespace) -> Any:
     if cfg_paths is None:
         raise ValueError("Missing motor config paths for real backend setup.")
     default_config_path, robot_config_path, motors_config_path = cfg_paths
+    motor_ordering: list[str] | None = None
+    if hasattr(policy, "model"):
+        model = policy.model
+        names = [
+            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+            for i in range(int(model.nu))
+        ]
+        if all(name is not None for name in names):
+            motor_ordering = [str(name) for name in names]
     return RealWorld(
-        policy.controller.wrench_sim,
+        robot=str(args.robot),
         control_dt=policy.control_dt,
         default_config_path=default_config_path,
         robot_config_path=robot_config_path,
         motors_config_path=motors_config_path,
+        motor_ordering=motor_ordering,
     )
 
 
@@ -420,7 +350,7 @@ class _ResultRecorder:
         clean_ctrl = {k: float(v) for k, v in control_inputs.items()}
         self.records.append(
             {
-                "obs": obs.to_dump_dict(),
+                "obs": asdict(obs),
                 "control_inputs": clean_ctrl,
                 "action": np.asarray(action, dtype=np.float32).copy(),
             }

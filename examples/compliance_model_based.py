@@ -299,9 +299,8 @@ class LeapModelBasedPolicy:
                 if prev is None:
                     value = current
                 else:
-                    value = (
-                        alpha * current
-                        + (1.0 - alpha) * np.asarray(prev, dtype=np.float32)
+                    value = alpha * current + (1.0 - alpha) * np.asarray(
+                        prev, dtype=np.float32
                     )
             else:
                 value = current
@@ -311,15 +310,13 @@ class LeapModelBasedPolicy:
     def _sync_sim_state_from_obs(self, obs: Any) -> None:
         """Explicitly sync wrench-sim state from observation before wrench readout."""
         has_update = False
-        qpos_obs = obs.get("qpos", None) if hasattr(obs, "get") else None
-        if qpos_obs is not None:
-            qpos_arr = np.asarray(qpos_obs, dtype=np.float32).reshape(-1)
+        if obs.qpos is not None:
+            qpos_arr = np.asarray(obs.qpos, dtype=np.float32).reshape(-1)
             if qpos_arr.shape[0] == int(self.model.nq):
                 self.data.qpos[:] = qpos_arr
                 has_update = True
-        qvel_obs = obs.get("qvel", None) if hasattr(obs, "get") else None
-        if qvel_obs is not None:
-            qvel_arr = np.asarray(qvel_obs, dtype=np.float32).reshape(-1)
+        if obs.qvel is not None:
+            qvel_arr = np.asarray(obs.qvel, dtype=np.float32).reshape(-1)
             if qvel_arr.shape[0] == int(self.model.nv):
                 self.data.qvel[:] = qvel_arr
                 has_update = True
@@ -339,9 +336,9 @@ class LeapModelBasedPolicy:
                 self.data.site_xpos[self.thumb_site_id], dtype=np.float64
             )
             thumb_real_rotvec = R.from_matrix(
-                np.asarray(self.data.site_xmat[self.thumb_site_id], dtype=np.float64).reshape(
-                    3, 3
-                )
+                np.asarray(
+                    self.data.site_xmat[self.thumb_site_id], dtype=np.float64
+                ).reshape(3, 3)
             ).as_rotvec()
         else:
             thumb_real_pos = np.full(3, np.nan, dtype=np.float64)
@@ -389,7 +386,7 @@ class LeapModelBasedPolicy:
 
     def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
         del sim
-        sim_time = float(obs.get("time", self.data.time))
+        sim_time = float(obs.time)
         if float(self.args.duration) > 0.0 and sim_time >= float(self.args.duration):
             print("[leaphand] Reached duration limit, exiting.")
             self.done = True
@@ -483,8 +480,12 @@ class LeapModelBasedPolicy:
                 policy_out=policy_out,
                 measured_wrenches=self.measured_wrenches,
             )
-            qpos_obs = np.asarray(obs.get("qpos", self.data.qpos), dtype=np.float32)
-            motor_tor_obs = np.asarray(obs["motor_tor"], dtype=np.float32)
+            qpos_obs = (
+                np.asarray(obs.qpos, dtype=np.float32)
+                if obs.qpos is not None
+                else np.asarray(self.data.qpos, dtype=np.float32)
+            )
+            motor_tor_obs = np.asarray(obs.motor_tor, dtype=np.float32)
             _, state_ref = self.controller.step(
                 command_matrix=command_matrix,
                 motor_torques=motor_tor_obs,
@@ -664,8 +665,8 @@ class ToddlerBotModelBasedPolicy:
                 pass
 
         ball_pos_obs = None
-        if obs is not None and hasattr(obs, "get"):
-            ball_pos_obs = obs.get("ball_pos", None)
+        if obs is not None:
+            ball_pos_obs = obs.extra.get("ball_pos", None)
         if ball_pos_obs is not None:
             ball_pos_arr = np.asarray(ball_pos_obs, dtype=np.float64).reshape(-1)
             if ball_pos_arr.shape[0] >= 3:
@@ -676,7 +677,7 @@ class ToddlerBotModelBasedPolicy:
         return self.default_ball_pos.copy()
 
     def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
-        t = float(obs.get("time", self.data.time))
+        t = float(obs.time)
         ball_pos = self.update_ball_pose_estimate(obs, sim, "real" in sim.name)
         self.ball_pos_estimate_log.append(
             np.asarray(ball_pos, dtype=np.float64).reshape(3).copy()

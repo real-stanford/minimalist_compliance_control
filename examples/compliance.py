@@ -278,8 +278,8 @@ class CompliancePolicy:
         self.command_matrix[:, COMMAND_LAYOUT.position] = self.pos_cmd
         self.command_matrix[:, COMMAND_LAYOUT.orientation] = self.ori_cmd
 
-        motor_tor_obs = np.asarray(obs["motor_tor"], dtype=np.float32)
-        qpos_obs = np.asarray(obs["qpos"], dtype=np.float32)
+        motor_tor_obs = np.asarray(obs.motor_tor, dtype=np.float32)
+        qpos_obs = np.asarray(obs.qpos, dtype=np.float32)
         wrenches, state_ref = self.controller.step(
             command_matrix=self.command_matrix,
             motor_torques=motor_tor_obs,
@@ -288,7 +288,7 @@ class CompliancePolicy:
 
         if self.plotter is not None:
             self.plotter.update_from_wrench_sim(
-                time_s=float(obs.get("time", 0.0)),
+                time_s=float(obs.time),
                 command_pose=np.concatenate(
                     [self.pos_cmd, self.ori_cmd], axis=1
                 ).astype(np.float32),

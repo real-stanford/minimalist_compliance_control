@@ -738,10 +738,10 @@ class ComplianceDPPolicy:
 
     def step(self, obs: Any, sim: Any) -> tuple[dict[str, float], np.ndarray]:
         del sim
-        qpos_obs = np.asarray(obs["qpos"], dtype=np.float32)
+        qpos_obs = np.asarray(obs.qpos, dtype=np.float32)
         self.controller.wrench_sim.set_qpos(qpos_obs)
         self.controller.wrench_sim.forward()
-        image = obs.get("image")
+        image = obs.image
         if image is None:
             image_arr = np.zeros(
                 (int(self.args.image_height), int(self.args.image_width), 3),
@@ -755,13 +755,11 @@ class ComplianceDPPolicy:
 
         x_obs = self._build_x_obs()
         _status, _pose_command, cmd, _raw_action = self._step_dp_core(
-            now=float(obs.get("time", self.data.time)),
+            now=float(obs.time),
             image_in=image_arr,
             x_obs=x_obs,
             x_wrench=None,
-            motor_pos=np.asarray(
-                obs.get("motor_pos", self.target_motor_pos), dtype=np.float32
-            ),
+            motor_pos=np.asarray(obs.motor_pos, dtype=np.float32),
         )
         cmd = np.asarray(cmd, dtype=np.float32)
         if cmd.shape != (self.num_sites, COMMAND_LAYOUT.width):
@@ -770,7 +768,7 @@ class ComplianceDPPolicy:
             )
         self.command_matrix[:] = cmd
 
-        motor_tor_obs = np.asarray(obs["motor_tor"], dtype=np.float32)
+        motor_tor_obs = np.asarray(obs.motor_tor, dtype=np.float32)
         _, state_ref = self.controller.step(
             command_matrix=self.command_matrix,
             motor_torques=motor_tor_obs,

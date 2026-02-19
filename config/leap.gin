@@ -30,6 +30,7 @@ ControllerConfig.gear_ratios_by_site = {
     "th_tip": (1, 1, 1, 1),
 }
 ControllerConfig.base_body_name = ""
+ControllerConfig.motor_torque_ema_alpha = 0.1
 
 # Wrench estimation
 WrenchEstimateConfig.force_reg = 1e-3

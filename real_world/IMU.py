@@ -190,8 +190,7 @@ class ThreadedIMU:
         output_freq: float = 200.0,
         cutoff_freq: float = 50.0,
         filter_order: int = 4,
-        imu1_mount_offset_euler: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        imu2_mount_offset_euler: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        imu_mount_offset_euler: Tuple[float, float, float] = (0.0, 0.0, 0.0),
     ):
         """Initialize ThreadedIMU with Butterworth filtering.
 
@@ -208,18 +207,17 @@ class ThreadedIMU:
         self.output_dt = 1 / self.output_freq
         self.decimation_factor = int(self.input_freq / self.output_freq)
 
-        # Initialize IMU with high frequency
-        self.imu1 = IMU(
-            address=0x4A, mount_offset_euler=imu1_mount_offset_euler
-        )  # IMU1 on top side
-        self.imu2 = IMU(
-            address=0x4B, offset=0, mount_offset_euler=imu2_mount_offset_euler
-        )  # IMU2 on bottom side
+        # Single-IMU setup.
+        self.imu = IMU(address=0x4A, mount_offset_euler=imu_mount_offset_euler)
 
         # Threading controls
         self.running = False
         self.lock = threading.Lock()
-        self.latest_state: Optional[Tuple[np.ndarray, np.ndarray]] = None
+        self.latest_state: Optional[
+            Tuple[
+                np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
+            ]
+        ] = None
         self.thread = None
 
         # Butterworth filter setup
@@ -231,11 +229,9 @@ class ThreadedIMU:
             filter_order, normalized_cutoff, btype="low", analog=False
         )
 
-        # Filter state for angular velocity (3 axes)
-        self.ang_vel1_past_inputs = np.zeros((len(self.b) - 1, 3), dtype=np.float32)
-        self.ang_vel1_past_outputs = np.zeros((len(self.a) - 1, 3), dtype=np.float32)
-        self.ang_vel2_past_inputs = np.zeros((len(self.b) - 1, 3), dtype=np.float32)
-        self.ang_vel2_past_outputs = np.zeros((len(self.a) - 1, 3), dtype=np.float32)
+        # Filter state for angular velocity (3 axes).
+        self.ang_vel_past_inputs = np.zeros((len(self.b) - 1, 3), dtype=np.float32)
+        self.ang_vel_past_outputs = np.zeros((len(self.a) - 1, 3), dtype=np.float32)
 
         # Decimation counter
         self.sample_counter = 0
@@ -249,76 +245,27 @@ class ThreadedIMU:
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
-    def combine_quaternion(self, q1_wxyz, q2_wxyz):
-        r1 = R.from_quat(q1_wxyz, scalar_first=True)
-        r2 = R.from_quat(q2_wxyz, scalar_first=True)
-
-        # Get yaw (about world Z) from each, using stable atan2 on the rotation matrix
-        R1 = r1.as_matrix()
-        R2 = r2.as_matrix()
-        yaw1 = np.arctan2(R1[1, 0], R1[0, 0])
-        yaw2 = np.arctan2(R2[1, 0], R2[0, 0])
-
-        # Remove yaw from r1 to get pure tilt (roll+pitch) in world frame
-        r1_no_yaw = R.from_euler("Z", -yaw1) * r1
-
-        # Combine: yaw from q2, tilt from q1
-        r = R.from_euler("Z", yaw2) * r1_no_yaw
-
-        q_wxyz = r.as_quat(scalar_first=True)
-        # Normalize for safety
-        q_wxyz /= np.linalg.norm(q_wxyz)
-        return q_wxyz
-
-    def combine_angular_velocity(self, ang_vel_raw1, ang_vel_raw2):
-        """
-        Combine angular velocities from two IMUs to get roll, pitch, and yaw rates.
-        """
-
-        # Directly extract and combine components
-        combined_ang_vel = np.array(
-            [
-                ang_vel_raw1[0],  # IMU1's x component → roll_rate (around X axis)
-                ang_vel_raw1[1],  # IMU1's y component → pitch_rate (around Y axis)
-                ang_vel_raw2[2],  # IMU2's z component → yaw_rate (around Z axis)
-            ]
-        )
-        return combined_ang_vel
-
     def _run(self):
         """Main data collection loop running at specified input frequency."""
         while self.running:
             try:
                 # Get raw IMU data with timeout
                 t_start = time.monotonic()
-                quat_raw1, ang_vel_raw1 = self.imu1.get_state()
-                quat_raw2, ang_vel_raw2 = self.imu2.get_state()
+                quat_raw, ang_vel_raw = self.imu.get_state()
 
-                # Apply Butterworth filter to angular velocity
+                # Apply Butterworth filter to angular velocity.
                 # (
-                #     filtered_ang_vel1,
-                #     self.ang_vel1_past_inputs,
-                #     self.ang_vel1_past_outputs,
+                #     filtered_ang_vel,
+                #     self.ang_vel_past_inputs,
+                #     self.ang_vel_past_outputs,
                 # ) = butterworth(
                 #     self.b,
                 #     self.a,
-                #     ang_vel_raw1,
-                #     self.ang_vel1_past_inputs,
-                #     self.ang_vel1_past_outputs,
+                #     ang_vel_raw,
+                #     self.ang_vel_past_inputs,
+                #     self.ang_vel_past_outputs,
                 # )
-                # (
-                #     filtered_ang_vel2,
-                #     self.ang_vel2_past_inputs,
-                #     self.ang_vel2_past_outputs,
-                # ) = butterworth(
-                #     self.b,
-                #     self.a,
-                #     ang_vel_raw2,
-                #     self.ang_vel2_past_inputs,
-                #     self.ang_vel2_past_outputs,
-                # )
-                filtered_ang_vel1 = ang_vel_raw1
-                filtered_ang_vel2 = ang_vel_raw2
+                filtered_ang_vel = ang_vel_raw
 
                 t_end = time.monotonic()
 
@@ -328,17 +275,15 @@ class ThreadedIMU:
                     self.sample_counter = 0
 
                     with self.lock:
-                        quat = self.combine_quaternion(quat_raw1, quat_raw2)
-                        ang_vel = self.combine_angular_velocity(
-                            filtered_ang_vel1, filtered_ang_vel2
-                        )
+                        # Keep legacy 6-item tuple shape expected by callers:
+                        # (quat_raw1, quat_raw2, quat_fused, ang_vel_raw1, ang_vel_raw2, ang_vel_fused)
                         self.latest_state = (
-                            quat_raw1.copy(),
-                            quat_raw2.copy(),
-                            quat.copy(),
-                            ang_vel_raw1.copy(),
-                            ang_vel_raw2.copy(),
-                            ang_vel.copy(),
+                            quat_raw.copy(),
+                            quat_raw.copy(),
+                            quat_raw.copy(),
+                            ang_vel_raw.copy(),
+                            ang_vel_raw.copy(),
+                            filtered_ang_vel.copy(),
                         )
 
                 remaining_time = self.input_dt - (t_end - t_start)
@@ -348,11 +293,17 @@ class ThreadedIMU:
             except Exception as e:
                 print(f"[ThreadedIMU] Error: {e}")
 
-    def get_latest_state(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    def get_latest_state(
+        self,
+    ) -> Optional[
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    ]:
         """Get the latest filtered IMU state.
 
         Returns:
-            Tuple of (quaternion, filtered_angular_velocity) or None if no data available
+            Legacy-compatible 6-item tuple
+            (quat_raw1, quat_raw2, quat_fused, ang_vel_raw1, ang_vel_raw2, ang_vel_fused),
+            where all items are derived from one IMU.
         """
         with self.lock:
             return self.latest_state
@@ -362,5 +313,4 @@ class ThreadedIMU:
         self.running = False
         if self.thread:
             self.thread.join()
-        self.imu1.close()
-        self.imu2.close()
+        self.imu.close()

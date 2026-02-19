@@ -34,6 +34,7 @@ class ControllerConfig:
     joint_indices_by_site: Optional[Dict[str, npt.NDArray[np.int32]]] = None
     motor_indices_by_site: Optional[Dict[str, npt.NDArray[np.int32]]] = None
     gear_ratios_by_site: Optional[Dict[str, npt.NDArray[np.float32]]] = None
+    motor_torque_ema_alpha: float = 0.1
 
 
 @gin.configurable
@@ -96,6 +97,12 @@ class ComplianceController:
 
         self.config = config
         self.estimate_config = estimate_config or WrenchEstimateConfig()
+        self._motor_torque_ema_alpha = float(self.config.motor_torque_ema_alpha)
+        if not (0.0 < self._motor_torque_ema_alpha <= 1.0):
+            raise ValueError(
+                "ControllerConfig.motor_torque_ema_alpha must be in (0, 1]."
+            )
+        self._motor_torque_ema: Optional[npt.NDArray[np.float32]] = None
         if self.config.fixed_base and self.config.base_body_name:
             raise ValueError("base_body_name must be empty when fixed_base is True.")
         self.wrench_sim = WrenchSim(
@@ -228,6 +235,27 @@ class ComplianceController:
             self.wrench_sim.set_qpos(default_qpos)
             self.wrench_sim.forward()
 
+    def _smooth_motor_torques(
+        self, motor_torques: npt.NDArray[np.float32]
+    ) -> npt.NDArray[np.float32]:
+        motor_torques_arr = np.asarray(motor_torques, dtype=np.float32).reshape(-1)
+        if motor_torques_arr.shape[0] != int(self.wrench_sim.model.nu):
+            raise ValueError(
+                f"motor_torques length {motor_torques_arr.shape[0]} "
+                f"!= model.nu {self.wrench_sim.model.nu}."
+            )
+        if (
+            self._motor_torque_ema is None
+            or self._motor_torque_ema.shape != motor_torques_arr.shape
+        ):
+            self._motor_torque_ema = motor_torques_arr.copy()
+        else:
+            alpha = self._motor_torque_ema_alpha
+            self._motor_torque_ema = (
+                alpha * motor_torques_arr + (1.0 - alpha) * self._motor_torque_ema
+            ).astype(np.float32)
+        return self._motor_torque_ema.copy()
+
     def step(
         self,
         command_matrix: npt.NDArray[np.float32],
@@ -270,7 +298,7 @@ class ComplianceController:
                 # )
 
         wrenches: Dict[str, npt.NDArray[np.float32]] = {}
-        motor_torques_arr = np.asarray(motor_torques, dtype=np.float32)
+        motor_torques_arr = self._smooth_motor_torques(motor_torques)
         bias = self.wrench_sim.bias_torque()
         for site in self.config.site_names:
             jacp, jacr = self.wrench_sim.site_jacobian(site)
