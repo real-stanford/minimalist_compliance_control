@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 
 from examples.compliance import CompliancePolicy
@@ -13,21 +11,15 @@ class ModelBasedPolicy(CompliancePolicy):
     def __init__(
         self,
         *,
-        name: str = "compliance_model_based",
         robot: str = "toddlerbot",
-        init_motor_pos: Any = None,
         sim: str = "mujoco",
         vis: bool = True,
-        plot: bool = False,
         scene_xml: str = "",
         duration: float = 120.0,
         control_dt: float = 0.02,
         prep_duration: float = 7.0,
         status_interval: float = 1.0,
-        **_: Any,
     ) -> None:
-        del name, init_motor_pos, plot
-
         if str(sim) != "mujoco":
             raise ValueError(
                 "compliance_model_based currently supports only --sim mujoco"

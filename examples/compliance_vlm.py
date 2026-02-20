@@ -6,31 +6,24 @@ compliance modules.
 
 from __future__ import annotations
 
-import argparse
 import json
 import shutil
 import tempfile
-import threading
-import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import joblib
+import mujoco
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial.transform import Rotation as R
 
 from examples.compliance import CompliancePolicy
 from real_world.camera import Camera
 from vlm.affordance.affordance_predictor import AffordancePredictor
 from vlm.affordance.plan_ee_pose import plan_end_effector_poses
-from vlm.utils.comm_utils import ZMQNode
-
-LEAP_DRAW_POS = np.array(
-    [2.23, 0, 0, 0.4, 2.23, 0, 0, 0.4, 2.23, 0, 0, 0.4, 0.0, -1.57, 0.0, 0.0],
-    dtype=np.float32,
-)
 
 
 class ComplianceVLMPolicy(CompliancePolicy):
@@ -41,88 +34,80 @@ class ComplianceVLMPolicy(CompliancePolicy):
         name: str,
         robot: str,
         init_motor_pos: npt.ArrayLike,
-        mode_control_port: int = 5591,
-        ip: str = "",
-        sim: str = "real",
-        vis: bool = False,
-        plot: bool = False,
-        robot_name: str = "",
+        replay: str = "",
         site_names: str = "",
-        mode: str = "waiting",
-        object: str = "black ink. vase",
-        disable_zmq: bool = False,
-        use_camera_stream: bool = False,
-        disable_video: bool = False,
+        object: str = "black ink. whiteboard. vase",
+        record_video: bool = True,
         image_height: int = 480,
         image_width: int = 640,
         predictor_model: str = "gemini-2.5-pro",
         predictor_provider: str = "gemini",
-        **kwargs: Any,
     ) -> None:
+        if robot == "leap":
+            gin_config_name = "leap_vlm.gin"
+        elif robot == "toddlerbot":
+            gin_config_name = "toddlerbot_vlm.gin"
+        else:
+            raise ValueError(f"Unsupported robot: {robot}")
+
         super().__init__(
             name=name,
             robot=robot,
             init_motor_pos=init_motor_pos,
-            ip=ip,
-            sim=sim,
-            vis=vis,
-            plot=plot,
-            **kwargs,
+            config_name=gin_config_name,
+            show_help=False,
         )
 
-        self.args = argparse.Namespace(
-            robot_name=robot_name,
-            site_names=site_names,
-            mode=mode,
-            object=object,
-            mode_control_port=int(mode_control_port),
-            disable_zmq=bool(disable_zmq),
-            use_camera_stream=bool(use_camera_stream),
-            disable_video=bool(disable_video),
-            image_height=int(image_height),
-            image_width=int(image_width),
-        )
+        model = self.controller.wrench_sim.model
+        self.head_name = str(self.compliance_cfg.head_name).strip()
+        self.head_site_id = -1
+        self.head_body_id = -1
+        if self.head_name:
+            self.head_site_id = int(
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, self.head_name)
+            )
+        if self.head_name:
+            self.head_body_id = int(
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, self.head_name)
+            )
 
-        if robot_name:
-            self.robot_name = str(robot_name)
-        elif self.robot == "leap":
-            self.robot_name = "leap_hand"
-        elif self.robot == "arx":
-            self.robot_name = "arx"
-        else:
-            self.robot_name = "toddlerbot_2xm"
+        self.image_height = int(image_height)
+        self.image_width = int(image_width)
 
         self.target_site_names: List[str] = []
-        if len(site_names.strip()) > 0:
+        site_names_str = str(site_names).strip()
+        self.site_names_fixed = len(site_names_str) > 0
+        if self.site_names_fixed:
             self.target_site_names = [
-                s.strip() for s in site_names.split(",") if s.strip()
+                s.strip() for s in site_names_str.split(",") if s.strip()
             ]
         if not self.target_site_names:
             if self.robot == "leap":
                 self.target_site_names = ["mf_tip"]
-            elif self.robot == "arx":
-                self.target_site_names = ["ee_site"]
             else:
                 self.target_site_names = ["left_hand_center"]
 
-        self.target_site_indices: List[int] = []
-        for site_name in self.target_site_names:
-            if site_name in self.wrench_site_names:
-                self.target_site_indices.append(self.wrench_site_names.index(site_name))
+        cfg_ref_motor_pos = np.asarray(
+            self.compliance_cfg.ref_motor_pos, dtype=np.float32
+        ).reshape(-1)
+        if cfg_ref_motor_pos.size > 0:
+            if cfg_ref_motor_pos.shape[0] != self.default_motor_pos.shape[0]:
+                raise ValueError(
+                    "ComplianceConfig.ref_motor_pos has wrong size: "
+                    f"expected {self.default_motor_pos.shape[0]}, "
+                    f"got {cfg_ref_motor_pos.shape[0]}."
+                )
+            self.ref_motor_pos = cfg_ref_motor_pos.copy()
 
-        if self.robot == "leap":
-            self.ref_motor_pos = LEAP_DRAW_POS.copy()
-            self.normal_pos_stiffness = 20.0
-            self.tangent_pos_stiffness = 200.0
-            self.normal_rot_stiffness = 10.0
-            self.tangent_rot_stiffness = 20.0
-            self.fixed_contact_force = 0.2
-        else:
-            self.normal_pos_stiffness = 80.0
-            self.tangent_pos_stiffness = 400.0
-            self.normal_rot_stiffness = 40.0
-            self.tangent_rot_stiffness = 40.0
-            self.fixed_contact_force = 5.0
+        self.kp_pos_normal = float(self.compliance_cfg.kp_pos_normal)
+        self.kp_pos_tangent = float(self.compliance_cfg.kp_pos_tangent)
+        self.kp_rot_normal = float(self.compliance_cfg.kp_rot_normal)
+        self.kp_rot_tangent = float(self.compliance_cfg.kp_rot_tangent)
+        self.fixed_contact_force = float(self.compliance_cfg.fixed_contact_force)
+        self.rest_pose_command = np.asarray(
+            self.base_pose_command, dtype=np.float32
+        ).copy()
+        self._set_rest_pose_from_ref_motor_pos()
 
         self.status = "waiting"
         self.target_object_label = str(object)
@@ -134,49 +119,43 @@ class ComplianceVLMPolicy(CompliancePolicy):
         self.wipe_pause_end_time: Optional[float] = None
         self.prediction_requested = False
         self.prediction_counter = 0
-        self.use_fixed_trajectory = False
+        self.replay = str(replay).strip()
         self.fixed_trajectory_active = False
-        self.wiping_complete = False
-
+        self.replay_task: Optional[str] = None
+        self.replay_contact_points_camera: Dict[str, np.ndarray] = {}
+        self.replay_contact_normals_camera: Dict[str, np.ndarray] = {}
+        self.replay_unavailable_reported = False
         self.predictor: Optional[AffordancePredictor] = None
-        try:
-            self.predictor = AffordancePredictor(
-                model=str(predictor_model),
-                provider=str(predictor_provider),
-            )
-        except Exception as exc:
-            self.predictor = None
-            print(f"[ComplianceVLM] predictor disabled: {exc}")
+        self._load_replay_trajectory()
+        self._activate_replay_task_if_available()
+
+        self.predictor = AffordancePredictor(
+            model=str(predictor_model),
+            provider=str(predictor_provider),
+        )
 
         self.left_camera: Optional[Camera] = None
         self.right_camera: Optional[Camera] = None
-        if bool(use_camera_stream):
-            try:
-                self.left_camera = Camera("left")
-                self.right_camera = Camera("right")
-            except Exception as exc:
-                self.left_camera = None
-                self.right_camera = None
-                print(f"[ComplianceVLM] camera stream disabled: {exc}")
+        try:
+            self.left_camera = Camera("left")
+            self.right_camera = Camera("right")
+        except Exception as exc:
+            self.left_camera = None
+            self.right_camera = None
+            print(f"[ComplianceVLM] camera stream disabled: {exc}")
 
-        self.mode_control_receiver: Optional[ZMQNode] = None
-        if not bool(disable_zmq):
-            try:
-                self.mode_control_receiver = ZMQNode(
-                    type="receiver", port=int(mode_control_port)
-                )
-                print(
-                    f"[ComplianceVLM] Mode control listening on port {mode_control_port} (w=wipe, d=draw)."
-                )
-            except Exception as exc:
-                self.mode_control_receiver = None
-                print(f"[ComplianceVLM] mode control disabled: {exc}")
+        self.teleop.set_command_bindings(
+            {"w": "wiping", "d": "drawing"},
+            help_labels={"w": "wipe", "d": "draw"},
+            enable_default_controls=False,
+        )
+        self.teleop.print_help(prefix="[ComplianceVLM]")
 
         self.debug_output_dir = tempfile.TemporaryDirectory(prefix="compliance_vlm_")
         self.prediction_executor = ThreadPoolExecutor(max_workers=1)
         self.prediction_future: Optional[Future] = None
 
-        self.record_video = not bool(disable_video)
+        self.record_video = bool(record_video)
         self.video_logging_active = False
         self.video_writer: Optional[cv2.VideoWriter] = None
         self.video_temp_dir: Optional[tempfile.TemporaryDirectory] = None
@@ -184,64 +163,10 @@ class ComplianceVLMPolicy(CompliancePolicy):
         self.video_fps: Optional[float] = None
         self.last_left_frame: Optional[np.ndarray] = None
         self.last_right_frame: Optional[np.ndarray] = None
-        self.video_capture_thread: Optional[threading.Thread] = None
-        self.video_capture_stop: Optional[threading.Event] = None
         self.video_frame_timestamps: List[float] = []
 
         self.set_stiffness(
-            pos_stiffness=[400.0, 400.0, 400.0],
-            rot_stiffness=[40.0, 40.0, 40.0],
-        )
-
-        if mode == "wiping":
-            self.set_mode(True, object_label=None, site_names=None)
-        elif mode == "drawing":
-            self.set_mode(False, object_label=str(object), site_names=None)
-
-    @classmethod
-    def from_argv(
-        cls,
-        argv: Sequence[str],
-        *,
-        robot: str,
-        sim: str,
-        vis: bool,
-        plot: bool,
-    ) -> "ComplianceVLMPolicy":
-        parser = argparse.ArgumentParser(description="Compliance VLM policy")
-        parser.add_argument("--robot-name", type=str, default="toddlerbot_2xm")
-        parser.add_argument("--site-names", type=str, default="")
-        parser.add_argument(
-            "--mode",
-            type=str,
-            default="waiting",
-            choices=["waiting", "wiping", "drawing"],
-        )
-        parser.add_argument("--object", type=str, default="black ink. vase")
-        parser.add_argument("--mode-control-port", type=int, default=5591)
-        parser.add_argument("--disable-zmq", action="store_true")
-        parser.add_argument("--use-camera-stream", action="store_true")
-        parser.add_argument("--disable-video", action="store_true")
-        parser.add_argument("--image-height", type=int, default=480)
-        parser.add_argument("--image-width", type=int, default=640)
-        args = parser.parse_args(list(argv))
-        return cls(
-            name="compliance_vlm",
-            robot=robot,
-            init_motor_pos=np.zeros(0, dtype=np.float32),
-            sim=sim,
-            vis=vis,
-            plot=plot,
-            robot_name=args.robot_name,
-            site_names=args.site_names,
-            mode=args.mode,
-            object=args.object,
-            mode_control_port=args.mode_control_port,
-            disable_zmq=args.disable_zmq,
-            use_camera_stream=args.use_camera_stream,
-            disable_video=args.disable_video,
-            image_height=args.image_height,
-            image_width=args.image_width,
+            pos_stiffness=[400.0, 400.0, 400.0], rot_stiffness=[40.0, 40.0, 40.0]
         )
 
     def reset(self) -> None:
@@ -254,7 +179,113 @@ class ComplianceVLMPolicy(CompliancePolicy):
             self.prediction_future = None
         self.status = "waiting"
         self.fixed_trajectory_active = False
-        self.wiping_complete = False
+        self._activate_replay_task_if_available()
+
+    def _normalize_task_label(self, value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lower()
+        if normalized in ("wipe", "wiping"):
+            return "wipe"
+        if normalized in ("draw", "drawing"):
+            return "draw"
+        return None
+
+    def _set_rest_pose_from_ref_motor_pos(self) -> None:
+        """Initialize rest pose from the compliance reference mapping."""
+        comp_ref = self.controller.compliance_ref
+        if comp_ref is None:
+            return
+
+        rest_pose = np.asarray(
+            comp_ref.get_x_ref_from_motor_pos(
+                np.asarray(self.ref_motor_pos, dtype=np.float32)
+            ),
+            dtype=np.float32,
+        )
+        self.rest_pose_command = rest_pose
+        self.pose_command[:, :] = self.rest_pose_command
+        self.base_pose_command[:, :] = self.rest_pose_command
+
+    def _activate_replay_task_if_available(self) -> None:
+        if not self.replay_task:
+            return
+        if self.replay_task == "wipe":
+            self.set_mode(True)
+            print("[ComplianceVLM] replay task detected: wipe (auto-selected).")
+        elif self.replay_task == "draw":
+            self.set_mode(False)
+            print("[ComplianceVLM] replay task detected: draw (auto-selected).")
+
+    def _replay_site_names(self) -> List[str]:
+        return [str(x) for x in self.replay_contact_points_camera.keys()]
+
+    def _default_site_names_for_mode(self, is_wiping: bool) -> List[str]:
+        if self.robot == "leap":
+            return ["mf_tip"] if is_wiping else ["rf_tip", "if_tip"]
+        return ["left_hand_center"] if is_wiping else ["right_hand_center"]
+
+    def _load_replay_trajectory(self) -> None:
+        self.replay_task = None
+        self.replay_contact_points_camera = {}
+        self.replay_contact_normals_camera = {}
+        path = self.get_fixed_trajectory_path()
+        if path is None:
+            if self.replay:
+                print(
+                    f"[ComplianceVLM] replay trajectory not found under: {self.replay}"
+                )
+            return
+        try:
+            payload = joblib.load(path)
+            if not isinstance(payload, dict):
+                raise ValueError("replay payload must be a dict.")
+            task = self._normalize_task_label(payload.get("task"))
+            if task is None:
+                raise ValueError("replay payload missing/invalid task.")
+            contact_points = payload.get("contact_pos_camera")
+            contact_normals = payload.get("contact_normals_camera")
+            if isinstance(contact_points, dict) and isinstance(contact_normals, dict):
+                self.replay_contact_points_camera = {
+                    str(k): np.asarray(v, dtype=np.float32)
+                    for k, v in contact_points.items()
+                }
+                self.replay_contact_normals_camera = {
+                    str(k): np.asarray(v, dtype=np.float32)
+                    for k, v in contact_normals.items()
+                }
+            if (
+                not self.replay_contact_points_camera
+                or not self.replay_contact_normals_camera
+            ):
+                raise ValueError(
+                    "replay payload must contain contact_pos_camera and contact_normals_camera."
+                )
+            self.replay_task = task
+            print(
+                f"[ComplianceVLM] loaded replay trajectory for task '{task}' from {path}"
+            )
+        except Exception as exc:
+            print(f"[ComplianceVLM] failed to load replay trajectory: {exc}")
+            self.replay_task = None
+            self.replay_contact_points_camera = {}
+            self.replay_contact_normals_camera = {}
+
+    def can_use_replay_for_current_mode(self) -> bool:
+        if self.status not in ("wiping", "drawing"):
+            return False
+        if self.replay_task is None:
+            return False
+        current_task = "wipe" if self.status == "wiping" else "draw"
+        replay_sites = set(self._replay_site_names())
+        if not replay_sites:
+            return False
+        if current_task != self.replay_task:
+            return False
+        return any(
+            site_name in replay_sites and site_name in self.wrench_site_names
+            for site_name in self.target_site_names
+        )
 
     def set_mode(
         self,
@@ -271,49 +302,97 @@ class ComplianceVLMPolicy(CompliancePolicy):
             self.target_object_label = str(object_label)
         if site_names is not None and len(site_names) > 0:
             self.target_site_names = [str(x) for x in site_names]
-            self.target_site_indices = [
-                self.wrench_site_names.index(s)
-                for s in self.target_site_names
-                if s in self.wrench_site_names
-            ]
+        elif not self.site_names_fixed:
+            self.target_site_names = self._default_site_names_for_mode(is_wiping)
+        if self.predictor is not None:
+            if is_wiping:
+                self.predictor.default_task = f"wipe up the {self.target_object_label} on the whiteboard with an eraser."
+            else:
+                self.predictor.default_task = f"draw the {self.target_object_label} on the whiteboard using the pen."
         self.trajectory_plans = {}
         self.traj_start_time = None
-        self.prediction_requested = True
+        self.wrench_command[:, :] = 0.0
+        self.prediction_requested = not self.can_use_replay_for_current_mode()
         self.fixed_trajectory_active = False
-        self.wiping_complete = False
 
     def get_fixed_trajectory_path(self) -> Optional[Path]:
-        if self.status == "wiping":
-            path = Path("results") / "affordance_wipe" / "trajectory.lz4"
-        elif self.status == "drawing":
-            path = Path("results") / "affordance_draw" / "trajectory.lz4"
-        else:
-            return None
-        return path if path.exists() else None
+        if self.replay:
+            replay_path = Path(self.replay).expanduser()
+            if replay_path.suffix == ".lz4":
+                return replay_path if replay_path.exists() else None
+            path = replay_path / "trajectory.lz4"
+            return path if path.exists() else None
 
-    def refresh_fixed_trajectory_flag(self) -> None:
-        self.use_fixed_trajectory = self.get_fixed_trajectory_path() is not None
+        return None
 
-    def prepare_fixed_plan(self, obs: Any) -> None:
-        path = self.get_fixed_trajectory_path()
-        if path is None:
-            self.refresh_fixed_trajectory_flag()
+    def prepare_fixed_plan(self) -> None:
+        if not self.can_use_replay_for_current_mode():
             return
         try:
-            payload = joblib.load(path)
-            plans = payload.get("trajectory_by_site")
-            if isinstance(plans, dict):
-                self.trajectory_plans = {
-                    str(k): tuple(v)
-                    for k, v in plans.items()
-                    if k in self.target_site_names
-                }
-                self.traj_start_time = float(obs.time)
-                self.fixed_trajectory_active = bool(self.trajectory_plans)
-                self.use_fixed_trajectory = True
+            valid_sites = [
+                site_name
+                for site_name in self.target_site_names
+                if site_name in self.wrench_site_names
+                and site_name in self.replay_contact_points_camera
+                and site_name in self.replay_contact_normals_camera
+            ]
+            if not valid_sites:
+                self.fixed_trajectory_active = False
+                return
+
+            # Replan from replayed camera-space contacts so execution uses current
+            # head pose and current compliance parameters.
+            head_pos, head_quat = self.get_head_pose()
+            pose_cur = {
+                site_name: np.asarray(
+                    self.pose_command[self.wrench_site_names.index(site_name)],
+                    dtype=np.float32,
+                )
+                for site_name in valid_sites
+            }
+            contact_points = {
+                site_name: np.asarray(
+                    self.replay_contact_points_camera[site_name], dtype=np.float32
+                )
+                for site_name in valid_sites
+            }
+            contact_normals = {
+                site_name: np.asarray(
+                    self.replay_contact_normals_camera[site_name], dtype=np.float32
+                )
+                for site_name in valid_sites
+            }
+            self.trajectory_plans = plan_end_effector_poses(
+                contact_points_camera=contact_points,
+                contact_normals_camera=contact_normals,
+                head_position_world=np.asarray(head_pos, dtype=np.float32),
+                head_quaternion_world_wxyz=np.asarray(head_quat, dtype=np.float32),
+                tangent_pos_stiffness=float(self.kp_pos_tangent),
+                normal_pos_stiffness=float(self.kp_pos_normal),
+                tangent_rot_stiffness=float(self.kp_rot_tangent),
+                normal_rot_stiffness=float(self.kp_rot_normal),
+                contact_force=float(self.fixed_contact_force),
+                pose_cur=pose_cur,
+                output_dir=None,
+                traj_dt=float(self.control_dt),
+                traj_v_max_contact=0.02,
+                traj_v_max_free=0.1,
+                tool=self.tool,
+                robot_name=self.robot,
+                task=self.replay_task,
+                mass=float(self.mass),
+                inertia_diag=np.asarray(self.inertia_diag, dtype=np.float32),
+            )
+
+            self.traj_start_time = None
+            self.fixed_trajectory_active = bool(self.trajectory_plans)
+            if self.fixed_trajectory_active:
+                print(
+                    "[ComplianceVLM] replay trajectory prepared for sites: "
+                    f"{list(self.trajectory_plans.keys())}"
+                )
         except Exception as exc:
             print(f"[ComplianceVLM] failed to load fixed trajectory: {exc}")
-            self.use_fixed_trajectory = False
             self.fixed_trajectory_active = False
 
     def get_prediction_output_dir(self, prediction_idx: int) -> Optional[str]:
@@ -325,34 +404,20 @@ class ComplianceVLMPolicy(CompliancePolicy):
         return str(out_dir)
 
     def check_mode_command(self) -> None:
-        if self.mode_control_receiver is None:
-            return
-        msg = self.mode_control_receiver.get_msg(return_last=True)
-        if msg is None:
-            return
-
-        cmd = None
-        if getattr(msg, "other", None) is not None:
-            candidate = msg.other.get("command")
-            if isinstance(candidate, str) and len(candidate) > 0:
-                cmd = candidate.lower().strip()
-        if cmd is None and getattr(msg, "control_inputs", None) is not None:
-            candidate = msg.control_inputs.get("command")
-            if isinstance(candidate, str) and len(candidate) > 0:
-                cmd = candidate.lower().strip()
+        cmd = self.teleop.poll_command()
         if cmd is None:
             return
 
-        if cmd.startswith("w"):
+        if cmd == "wiping":
             self.set_mode(True)
-        elif cmd.startswith("d"):
+        elif cmd == "drawing":
             self.set_mode(False)
 
     def _to_hwc_u8(self, image: np.ndarray) -> np.ndarray:
         arr = np.asarray(image)
         if arr.ndim != 3:
             arr = np.zeros(
-                (int(self.args.image_height), int(self.args.image_width), 3),
+                (int(self.image_height), int(self.image_width), 3),
                 dtype=np.uint8,
             )
         if arr.shape[0] in (1, 3) and arr.shape[2] not in (1, 3):
@@ -366,37 +431,47 @@ class ComplianceVLMPolicy(CompliancePolicy):
             arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
         return arr
 
-    def _get_stereo_images(self, obs: Any) -> tuple[np.ndarray, np.ndarray]:
-        left = None
-        right = None
+    def get_head_pose(self) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        """Return configured head pose as world position and scalar-first quaternion."""
+        data = self.controller.wrench_sim.data
+        if self.head_body_id >= 0:
+            pos = np.asarray(data.xpos[self.head_body_id], dtype=np.float32)
+            quat = np.asarray(data.xquat[self.head_body_id], dtype=np.float32)
+            return pos.astype(np.float32), np.asarray(quat, dtype=np.float32)
+        if self.head_site_id >= 0:
+            pos = np.asarray(data.site_xpos[self.head_site_id], dtype=np.float32)
+            quat = R.from_matrix(
+                np.asarray(data.site_xmat[self.head_site_id], dtype=np.float32).reshape(
+                    3, 3
+                )
+            ).as_quat(scalar_first=True)
+            return pos.astype(np.float32), np.asarray(quat, dtype=np.float32)
+        raise ValueError(
+            f"Head pose source '{self.head_name}' not found as site/body. "
+            "Configure ComplianceConfig.head_name in *_vlm.gin."
+        )
+
+    def _get_stereo_images(self) -> tuple[np.ndarray, np.ndarray]:
         if self.left_camera is not None:
             try:
-                left = self.left_camera.get_frame()
-                self.last_left_frame = left
+                self.last_left_frame = self.left_camera.get_frame()
             except Exception:
-                left = self.last_left_frame
+                pass
         if self.right_camera is not None:
             try:
-                right = self.right_camera.get_frame()
-                self.last_right_frame = right
+                self.last_right_frame = self.right_camera.get_frame()
             except Exception:
-                right = self.last_right_frame
+                pass
 
-        if left is None:
-            left = getattr(obs, "left_image", None)
-        if left is None:
-            left = getattr(obs, "image", None)
-        if right is None:
-            right = getattr(obs, "right_image", None)
-        if right is None:
-            right = left
+        left = self.last_left_frame
+        right = self.last_right_frame if self.last_right_frame is not None else left
 
         if left is None:
             left = np.zeros(
-                (int(self.args.image_height), int(self.args.image_width), 3),
-                dtype=np.uint8,
+                (int(self.image_height), int(self.image_width), 3), dtype=np.uint8
             )
-        if right is None:
+            right = left
+        elif right is None:
             right = left
 
         return self._to_hwc_u8(np.asarray(left)), self._to_hwc_u8(np.asarray(right))
@@ -409,6 +484,9 @@ class ComplianceVLMPolicy(CompliancePolicy):
         right_image: np.ndarray,
         output_dir: Optional[str],
         pose_cur_by_site: Dict[str, np.ndarray],
+        site_names: List[str],
+        is_wiping: bool,
+        object_label: str,
     ) -> Optional[Dict[str, Tuple[np.ndarray, ...]]]:
         if self.predictor is None:
             return None
@@ -416,25 +494,41 @@ class ComplianceVLMPolicy(CompliancePolicy):
         prediction = self.predictor.predict(
             left_image=left_image,
             right_image=right_image,
-            robot_name=self.robot_name,
-            site_names=self.target_site_names,
-            is_wiping=(self.status == "wiping"),
+            robot_name=self.robot,
+            site_names=site_names,
+            is_wiping=is_wiping,
             output_dir=output_dir,
-            object_label=self.target_object_label,
+            object_label=object_label,
         )
         if prediction is None:
             return None
 
+        if not (
+            isinstance(prediction, tuple)
+            and len(prediction) == 2
+            and isinstance(prediction[0], dict)
+            and isinstance(prediction[1], dict)
+        ):
+            print(
+                "[ComplianceVLM] prediction failed: expected (contact_points_dict, "
+                f"contact_normals_dict), got {type(prediction).__name__}"
+            )
+            return None
+        raw_points, raw_normals = prediction
+        valid_sites = [
+            s
+            for s in site_names
+            if s in raw_points and s in raw_normals and s in pose_cur_by_site
+        ]
         contact_points = {
-            site_name: np.asarray(values[0], dtype=np.float32)
-            for site_name, values in prediction.items()
-            if site_name in self.target_site_names
+            site_name: np.asarray(raw_points[site_name], dtype=np.float32)
+            for site_name in valid_sites
         }
         contact_normals = {
-            site_name: np.asarray(values[1], dtype=np.float32)
-            for site_name, values in prediction.items()
-            if site_name in self.target_site_names
+            site_name: np.asarray(raw_normals[site_name], dtype=np.float32)
+            for site_name in valid_sites
         }
+
         if not contact_points:
             return None
 
@@ -443,10 +537,10 @@ class ComplianceVLMPolicy(CompliancePolicy):
             contact_normals_camera=contact_normals,
             head_position_world=np.asarray(head_pos, dtype=np.float32),
             head_quaternion_world_wxyz=np.asarray(head_quat, dtype=np.float32),
-            tangent_pos_stiffness=float(self.tangent_pos_stiffness),
-            normal_pos_stiffness=float(self.normal_pos_stiffness),
-            tangent_rot_stiffness=float(self.tangent_rot_stiffness),
-            normal_rot_stiffness=float(self.normal_rot_stiffness),
+            tangent_pos_stiffness=float(self.kp_pos_tangent),
+            normal_pos_stiffness=float(self.kp_pos_normal),
+            tangent_rot_stiffness=float(self.kp_rot_tangent),
+            normal_rot_stiffness=float(self.kp_rot_normal),
             contact_force=float(self.fixed_contact_force),
             pose_cur=pose_cur_by_site,
             output_dir=output_dir,
@@ -454,12 +548,13 @@ class ComplianceVLMPolicy(CompliancePolicy):
             traj_v_max_contact=0.02,
             traj_v_max_free=0.1,
             tool=self.tool,
-            robot_name=self.robot_name,
+            robot_name=self.robot,
+            task="wipe" if is_wiping else "draw",
             mass=float(self.mass),
             inertia_diag=np.asarray(self.inertia_diag, dtype=np.float32),
         )
 
-    def maybe_start_prediction(self, obs: Any) -> None:
+    def maybe_start_prediction(self, obs: Any, has_fixed_trajectory: bool) -> None:
         if self.status == "waiting":
             return
         if self.prediction_future is not None:
@@ -468,19 +563,22 @@ class ComplianceVLMPolicy(CompliancePolicy):
             return
         if not self.prediction_requested and self.trajectory_plans:
             return
-        if self.use_fixed_trajectory and not self.trajectory_plans:
+        if has_fixed_trajectory and not self.trajectory_plans:
             return
 
-        left_image, right_image = self._get_stereo_images(obs)
-        head_pos, head_quat = self.controller.get_head_pose()
+        left_image, right_image = self._get_stereo_images()
+        head_pos, head_quat = self.get_head_pose()
         output_dir = self.get_prediction_output_dir(self.prediction_counter)
+        site_names = list(self.target_site_names)
+        is_wiping = self.status == "wiping"
+        object_label = str(self.target_object_label)
 
         pose_cur = {
             site_name: np.asarray(
                 self.pose_command[self.wrench_site_names.index(site_name)],
                 dtype=np.float32,
             )
-            for site_name in self.target_site_names
+            for site_name in site_names
             if site_name in self.wrench_site_names
         }
         self.prediction_future = self.prediction_executor.submit(
@@ -491,6 +589,9 @@ class ComplianceVLMPolicy(CompliancePolicy):
             right_image,
             output_dir,
             pose_cur,
+            site_names,
+            is_wiping,
+            object_label,
         )
         self.prediction_counter += 1
         self.prediction_requested = False
@@ -499,7 +600,7 @@ class ComplianceVLMPolicy(CompliancePolicy):
         if self.status == "wiping":
             self.prediction_requested = True
 
-    def _consume_prediction(self) -> None:
+    def _consume_prediction(self, obs_time: Optional[float] = None) -> None:
         if self.prediction_future is None:
             return
         if not self.prediction_future.done():
@@ -513,9 +614,8 @@ class ComplianceVLMPolicy(CompliancePolicy):
 
         if result is None:
             if self.status == "wiping":
-                self.wipe_pause_end_time = (
-                    float(time.monotonic()) + self.wipe_pause_duration
-                )
+                now = float(obs_time) if obs_time is not None else 0.0
+                self.wipe_pause_end_time = now + self.wipe_pause_duration
             return
 
         self.trajectory_plans = result
@@ -537,30 +637,17 @@ class ComplianceVLMPolicy(CompliancePolicy):
             if plan is None:
                 continue
 
-            if len(plan) >= 9:
-                (
-                    time_samples,
-                    _,
-                    ee_pos,
-                    ee_ori,
-                    pos_stiffness,
-                    rot_stiffness,
-                    pos_damping,
-                    rot_damping,
-                    command_forces,
-                ) = plan
-            else:
-                (
-                    time_samples,
-                    _,
-                    ee_pos,
-                    ee_ori,
-                    pos_stiffness,
-                    rot_stiffness,
-                    pos_damping,
-                    rot_damping,
-                ) = plan
-                command_forces = np.zeros((len(time_samples), 3), dtype=np.float32)
+            (
+                time_samples,
+                _,
+                ee_pos,
+                ee_ori,
+                pos_stiffness,
+                rot_stiffness,
+                pos_damping,
+                rot_damping,
+                command_forces,
+            ) = plan
 
             idx = np.searchsorted(time_samples, elapsed, side="right") - 1
             idx = int(np.clip(idx, 0, len(time_samples) - 1))
@@ -585,9 +672,12 @@ class ComplianceVLMPolicy(CompliancePolicy):
                 command_forces[idx], dtype=np.float32
             )
 
+        # Base CompliancePolicy.step() rebuilds pose_command from base_pose_command
+        # each cycle; keep base_pose in sync with replay references.
+        self.base_pose_command = np.asarray(self.pose_command, dtype=np.float32).copy()
+
         if indices and all(idx >= length - 1 for idx, length in indices.values()):
             if self.status == "wiping":
-                self.wiping_complete = True
                 if self.fixed_trajectory_active:
                     self.status = "waiting"
                     self.wipe_pause_end_time = None
@@ -599,7 +689,7 @@ class ComplianceVLMPolicy(CompliancePolicy):
             self.trajectory_plans = {}
             self.traj_start_time = None
 
-    def _start_video_logging(self) -> None:
+    def start_video_logging(self) -> None:
         if self.video_logging_active or not self.record_video:
             return
         self.video_temp_dir = tempfile.TemporaryDirectory(
@@ -608,9 +698,6 @@ class ComplianceVLMPolicy(CompliancePolicy):
         self.video_path = Path(self.video_temp_dir.name) / "camera.mp4"
         self.video_fps = max(1.0, 1.0 / max(self.control_dt, 1e-3))
         self.video_logging_active = True
-
-    def start_video_logging(self) -> None:
-        self._start_video_logging()
 
     def ensure_video_writer(self, frame: np.ndarray) -> bool:
         if self.video_writer is not None:
@@ -631,57 +718,7 @@ class ComplianceVLMPolicy(CompliancePolicy):
         self.video_writer = writer
         return True
 
-    def start_video_capture_thread(self) -> None:
-        if (
-            self.video_capture_thread is not None
-            and self.video_capture_thread.is_alive()
-        ):
-            return
-        self.video_capture_stop = threading.Event()
-        self.video_capture_thread = threading.Thread(
-            target=self.video_capture_worker,
-            name="ComplianceVLMCapture",
-            daemon=True,
-        )
-        self.video_capture_thread.start()
-
-    def stop_video_capture_thread(self, timeout_s: float = 1.0) -> None:
-        if self.video_capture_stop is not None:
-            self.video_capture_stop.set()
-        if self.video_capture_thread is not None:
-            self.video_capture_thread.join(timeout=timeout_s)
-        self.video_capture_thread = None
-        self.video_capture_stop = None
-
-    def video_capture_worker(self) -> None:
-        capture_dt = max(float(self.control_dt), 1e-3)
-        next_t = time.monotonic()
-        while True:
-            if self.video_capture_stop is not None and self.video_capture_stop.is_set():
-                break
-            now = time.monotonic()
-            if now < next_t:
-                time.sleep(next_t - now)
-            next_t += capture_dt
-            if self.left_camera is None:
-                continue
-            try:
-                frame = self.left_camera.get_frame()
-            except Exception:
-                frame = None
-            if frame is None or not self.video_logging_active:
-                continue
-            if not self.ensure_video_writer(frame):
-                continue
-            assert self.video_writer is not None
-            if frame.ndim == 3:
-                pair = frame
-            else:
-                pair = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-            self.video_writer.write(pair)
-            self.video_frame_timestamps.append(float(time.monotonic()))
-
-    def _log_camera_frame(
+    def log_camera_frame(
         self, timestamp_s: float, left: np.ndarray, right: np.ndarray
     ) -> None:
         if not self.video_logging_active:
@@ -693,13 +730,7 @@ class ComplianceVLMPolicy(CompliancePolicy):
         self.video_writer.write(frame)
         self.video_frame_timestamps.append(float(timestamp_s))
 
-    def log_camera_frame(
-        self, timestamp_s: float, left: np.ndarray, right: np.ndarray
-    ) -> None:
-        self._log_camera_frame(timestamp_s, left, right)
-
     def export_camera_video(self, exp_dir: Path) -> None:
-        self.stop_video_capture_thread()
         if self.video_writer is not None:
             self.video_writer.release()
             self.video_writer = None
@@ -713,7 +744,6 @@ class ComplianceVLMPolicy(CompliancePolicy):
             json.dump(self.video_frame_timestamps, f, indent=2)
 
     def discard_video_recording(self) -> None:
-        self.stop_video_capture_thread()
         if self.video_writer is not None:
             self.video_writer.release()
             self.video_writer = None
@@ -729,7 +759,14 @@ class ComplianceVLMPolicy(CompliancePolicy):
     ) -> npt.NDArray[np.float32]:
         action = super().step(obs, sim)
         self.check_mode_command()
-        self.refresh_fixed_trajectory_flag()
+
+        # Let base policy initialize preparation trajectory first.
+        if not bool(getattr(self, "is_prepared", False)):
+            return np.asarray(action, dtype=np.float32)
+
+        prep_duration = float(getattr(self, "prep_duration", 0.0))
+        if float(obs.time) < prep_duration:
+            return np.asarray(action, dtype=np.float32)
 
         if self.status == "waiting":
             self.wipe_pause_end_time = None
@@ -745,16 +782,34 @@ class ComplianceVLMPolicy(CompliancePolicy):
                 self.traj_start_time = None
                 self.request_prediction_after_completion()
             else:
-                self._consume_prediction()
+                self._consume_prediction(float(obs.time))
                 return np.asarray(action, dtype=np.float32)
 
-        if self.use_fixed_trajectory and not self.trajectory_plans:
-            self.prepare_fixed_plan(obs)
-        self.maybe_start_prediction(obs)
-        self._consume_prediction()
+        has_fixed_trajectory = self.can_use_replay_for_current_mode()
+        if self.replay_task is not None and not has_fixed_trajectory:
+            if not self.replay_unavailable_reported:
+                current_task = (
+                    "wipe"
+                    if self.status == "wiping"
+                    else ("draw" if self.status == "drawing" else "none")
+                )
+                print(
+                    "[ComplianceVLM] replay not active for current state: "
+                    f"current_task={current_task}, "
+                    f"replay_task={self.replay_task}, "
+                    f"target_sites={self.target_site_names}, "
+                    f"replay_sites={self._replay_site_names()}"
+                )
+                self.replay_unavailable_reported = True
+        elif has_fixed_trajectory:
+            self.replay_unavailable_reported = False
+        if has_fixed_trajectory and not self.trajectory_plans:
+            self.prepare_fixed_plan()
+        self.maybe_start_prediction(obs, has_fixed_trajectory)
+        self._consume_prediction(float(obs.time))
         self._apply_trajectory(float(obs.time))
 
-        left, right = self._get_stereo_images(obs)
+        left, right = self._get_stereo_images()
         if self.record_video:
             self.start_video_logging()
             self.log_camera_frame(float(obs.time), left, right)
@@ -762,10 +817,6 @@ class ComplianceVLMPolicy(CompliancePolicy):
         return np.asarray(action, dtype=np.float32)
 
     def close(self, exp_folder_path: str = "") -> None:
-        if self.mode_control_receiver is not None:
-            self.mode_control_receiver.close()
-            self.mode_control_receiver = None
-
         if self.prediction_future is not None:
             self.prediction_future.cancel()
             self.prediction_future = None
@@ -789,10 +840,17 @@ class ComplianceVLMPolicy(CompliancePolicy):
             exp_dir.mkdir(parents=True, exist_ok=True)
             src = Path(self.debug_output_dir.name)
             if src.exists():
-                dst = exp_dir / "affordance_debug"
-                if dst.exists():
-                    shutil.rmtree(dst)
-                shutil.copytree(src, dst)
+                for item in src.iterdir():
+                    dst = exp_dir / item.name
+                    if dst.exists():
+                        if dst.is_dir():
+                            shutil.rmtree(dst)
+                        else:
+                            dst.unlink()
+                    if item.is_dir():
+                        shutil.copytree(item, dst)
+                    else:
+                        shutil.copy2(item, dst)
 
         if exp_folder_path:
             self.export_camera_video(Path(exp_folder_path))

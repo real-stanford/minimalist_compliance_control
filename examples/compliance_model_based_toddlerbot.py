@@ -1478,9 +1478,16 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
             "right": bimanual_generate_constraint_jacobian(num_hands=3),
             "both": bimanual_generate_constraint_jacobian(num_hands=6),
         }
-        self.control_receiver = KeyboardControlReceiver()
-        if self.control_receiver.enabled:
-            print("[model_based] Commands: c=reverse, l=left, r=right, b=both")
+        self.control_receiver = KeyboardControlReceiver(
+            valid_commands={"c", "l", "r", "b"},
+            name="model_based",
+            help_labels={
+                "c": "reverse",
+                "l": "left",
+                "r": "right",
+                "b": "both",
+            },
+        )
 
         (
             kp,

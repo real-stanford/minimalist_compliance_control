@@ -109,8 +109,8 @@ LEAP_TOOL_OFFSETS = {
 }
 
 TOOL_OFFSETS_BY_VARIANT = {
-    "toddlerbot_2xm": TODDY_TOOL_OFFSETS,
-    "leap_hand": LEAP_TOOL_OFFSETS,
+    "toddlerbot": TODDY_TOOL_OFFSETS,
+    "leap": LEAP_TOOL_OFFSETS,
 }
 
 
@@ -809,7 +809,8 @@ def plan_end_effector_poses(
     pause_prepare: float = 2.0,
     pause_contact: float = 0.2,
     tool: str = "eraser",
-    robot_name: str = "toddlerbot_2xm",
+    robot_name: str = "toddlerbot",
+    task: Optional[str] = None,
     mass: float | np.ndarray = 1.0,
     inertia_diag: float | np.ndarray = (1.0, 1.0, 1.0),
 ):
@@ -829,6 +830,12 @@ def plan_end_effector_poses(
                 "contact_force must be a scalar or have one value per site."
             )
     rot_offsets, contact_offsets = get_tool_offsets(tool, robot_name, site_names)
+
+    if task is None:
+        if tool == "eraser":
+            task = "wipe"
+        elif tool == "pen":
+            task = "draw"
 
     camera_extrinsics = (
         LEAP_CAMERA_EXTRINSICS if "leap" in robot_name else TODDY_CAMERA_EXTRINSICS
@@ -882,6 +889,7 @@ def plan_end_effector_poses(
             "contact_pos_camera": contact_points_camera,
             "contact_normals_camera": contact_normals_camera,
             "trajectory_by_site": trajectory_by_site,
+            "task": task,
         }
         joblib.dump(payload, data_path, compress="lz4")
         print(f"Saved the end effector trajectory data to {data_path}")

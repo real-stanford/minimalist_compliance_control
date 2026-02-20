@@ -102,10 +102,10 @@ interphalangeal} joints.
       <geom group="3" material="black"/>
     </default>
     <default class="tip">
-      <geom type="mesh" mesh="tip" friction="0.8 0.8 0.8" material="white"/>
+      <geom type="mesh" mesh="tip" friction="0.5" material="white"/>
     </default>
     <default class="thumb_tip">
-      <geom type="mesh" mesh="thumb_tip" friction="0.8 0.8 0.8" material="white"/>
+      <geom type="mesh" mesh="thumb_tip" friction="0.5" material="white"/>
     </default>
 
     <!-- joint class defaults -->
@@ -236,6 +236,7 @@ interphalangeal} joints.
 
   <worldbody>
     <body name="palm" pos="0 0 0.25" quat="1 0 0 0">
+      <site name="palm_root" pos="-0.1752 -0.117 0.0375" type="sphere" size="0.004" rgba="0.9 0.3 0.3 1"/>
       <!-- palm -->
       <inertial pos="-0.12546 -0.047739 0.015867" quat="0.423786 0.570263 -0.402758 0.577054" mass="0.235"
         diaginertia="0.000405067 0.000304529 0.000179484"/>

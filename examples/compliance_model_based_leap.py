@@ -335,12 +335,11 @@ def _init(
     # Stdin receiver for keyboard control.
     policy.control_receiver = None
     try:
-        policy.control_receiver = KeyboardControlReceiver()
-        if policy.control_receiver is not None and policy.control_receiver.enabled:
-            print(
-                "[LeapRotateCompliance] Keyboard control active on stdin "
-                "(c=reverse, r=switch mode)."
-            )
+        policy.control_receiver = KeyboardControlReceiver(
+            valid_commands={"c", "r"},
+            name="LeapRotateCompliance",
+            help_labels={"c": "reverse", "r": "switch mode"},
+        )
     except Exception as exc:
         policy.control_receiver = None
         print(f"[LeapRotateCompliance] Warning: control receiver disabled: {exc}")
@@ -2112,7 +2111,6 @@ class LeapModelBasedPolicy(CompliancePolicy):
         prep_duration: float = 7.0,
         status_interval: float = 1.0,
         vis: bool = True,
-        **_: Any,
     ) -> None:
         self.vis = bool(vis)
         self.duration = float(duration)
@@ -2408,7 +2406,6 @@ class LeapModelBasedPolicy(CompliancePolicy):
         )
 
     def step(self, obs: Any, sim: Any) -> np.ndarray:
-        del sim
         sim_time = float(obs.time)
         if self.duration > 0.0 and sim_time >= self.duration:
             print("[leaphand] Reached duration limit, exiting.")
@@ -2417,6 +2414,17 @@ class LeapModelBasedPolicy(CompliancePolicy):
 
         self._sync_sim_state_from_obs(obs)
         self._update_measured_wrenches()
+        # Keep the object suspended in the environment sim during prep/close so the
+        # hand can approach and grasp before free interaction starts.
+        if (
+            hasattr(sim, "model")
+            and hasattr(sim, "data")
+            and (sim_time < self.prep_duration or str(self.policy.phase) == "close")
+        ):
+            capture_object_init(self.policy)
+            fix_object(self.policy, sim, sim_name="sim")
+            mujoco.mj_forward(sim.model, sim.data)
+
         if sim_time < self.prep_duration:
             step_policy(
                 self.policy,

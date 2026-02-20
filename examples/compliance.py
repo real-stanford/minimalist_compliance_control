@@ -35,7 +35,14 @@ from minimalist_compliance_control.wrench_estimation import WrenchEstimateConfig
 class ComplianceConfig:
     kp_pos: Any = 100.0
     kp_rot: Any = 10.0
+    kp_pos_normal: Optional[float] = None
+    kp_pos_tangent: Optional[float] = None
+    kp_rot_normal: Optional[float] = None
+    kp_rot_tangent: Optional[float] = None
+    fixed_contact_force: Optional[float] = None
+    head_name: str = "head"
     initial_pose: Sequence[Sequence[float]] = ()
+    ref_motor_pos: Sequence[float] = ()
     use_compliance: bool = True
     use_balance: bool = False
     balance_yaw: bool = False
@@ -44,26 +51,39 @@ class ComplianceConfig:
 class CompliancePolicy:
     """Old-style base compliance policy built on ComplianceController."""
 
-    def __init__(self, name: str, robot: str, init_motor_pos: npt.ArrayLike) -> None:
+    def __init__(
+        self,
+        name: str,
+        robot: str,
+        init_motor_pos: npt.ArrayLike,
+        config_name: Optional[str] = None,
+        show_help: bool = True,
+    ) -> None:
         self.name = name
         self.robot = robot
 
         self.repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-        if self.robot == "leap":
-            config_name = "leap.gin"
+        selected_config_name: str
+        if config_name is not None:
+            selected_config_name = str(config_name)
+        elif self.robot == "leap":
+            selected_config_name = "leap.gin"
         elif self.robot == "arx":
-            config_name = "arx.gin"
+            selected_config_name = "arx.gin"
         else:
-            config_name = "toddlerbot.gin"
+            selected_config_name = "toddlerbot.gin"
 
         gin.clear_config()
-        gin.parse_config_file(os.path.join(self.repo_root, "config", config_name))
+        gin.parse_config_file(
+            os.path.join(self.repo_root, "config", selected_config_name)
+        )
         gin.bind_parameter("WrenchSimConfig.view", False)
         gin.bind_parameter("WrenchSimConfig.render", False)
 
         controller_cfg = ControllerConfig()
         compliance_cfg = ComplianceConfig()
+        self.compliance_cfg = compliance_cfg
         self.controller = ComplianceController(
             config=controller_cfg,
             estimate_config=WrenchEstimateConfig(),
@@ -104,13 +124,10 @@ class CompliancePolicy:
         self.base_pose_command = self.pose_command.copy()
 
         self.teleop = KeyboardTeleop(
-            num_sites=self.num_sites, site_names=self.wrench_site_names
+            num_sites=self.num_sites,
+            site_names=self.wrench_site_names,
+            show_help=show_help,
         )
-        print(
-            "[teleop] keys: w/x:+/-x, a/d:+/-y, q/z:+/-z, "
-            "p=toggle pos/rot, n=next site, r=reset site, f=toggle random force"
-        )
-        print("[teleop] focus the terminal (stdin) for keyboard controls.")
         self.key_listener = KeyboardListener(self.teleop)
         self.key_listener.start()
 

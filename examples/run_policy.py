@@ -112,7 +112,7 @@ class ResultRecorder:
         if self.enabled:
             stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
             self.root_dir = os.path.join(
-                _repo_root(), "results", f"{robot}_{policy}_{stamp}"
+                _repo_root(), "results", f"{robot}_{policy}_{sim}_{stamp}"
             )
             os.makedirs(self.root_dir, exist_ok=True)
             print(f"[run_policy] dump path: {self.root_dir}")
@@ -217,13 +217,30 @@ def _parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ckpt", type=str, default="")
     parser.add_argument("--object", type=str, default="black ink. whiteboard. vase")
     parser.add_argument("--site-names", type=str, default="")
+    parser.add_argument(
+        "--replay",
+        type=str,
+        default="",
+        help="Path to replay trajectory folder (or trajectory .lz4 file) for compliance_vlm.",
+    )
 
     return parser.parse_args(args=args)
 
 
 def main(args: Sequence[str] | None = None) -> None:
     parsed = _parse_args(args)
-    gin_path = os.path.join(_repo_root(), "config", f"{parsed.robot}.gin")
+    if str(parsed.policy) == "compliance_vlm" and str(parsed.robot) in {
+        "toddlerbot",
+        "leap",
+    }:
+        gin_file = f"{parsed.robot}_vlm.gin"
+    elif str(parsed.policy) == "compliance_model_based" and str(parsed.robot) == "leap":
+        gin_file = "leap_model_based.gin"
+    elif str(parsed.policy) == "compliance_dp" and str(parsed.robot) == "toddlerbot":
+        gin_file = "toddlerbot_dp.gin"
+    else:
+        gin_file = f"{parsed.robot}.gin"
+    gin_path = os.path.join(_repo_root(), "config", gin_file)
     gin.parse_config_file(gin_path, skip_unknown=True)
     motor_cfg_paths = MotorConfigPaths()
     if (
@@ -275,7 +292,7 @@ def main(args: Sequence[str] | None = None) -> None:
         from examples.compliance_model_based import ModelBasedPolicy
 
         policy = ModelBasedPolicy(
-            **policy_kwargs,
+            robot=str(parsed.robot),
             sim=str(parsed.sim),
             vis=vis_enabled,
         )
@@ -285,20 +302,18 @@ def main(args: Sequence[str] | None = None) -> None:
         policy = ComplianceDPPolicy(
             **policy_kwargs,
             ckpt=str(parsed.ckpt),
-            ip=str(parsed.ip),
-            sim=str(parsed.sim),
-            vis=vis_enabled,
         )
     elif policy_name == "compliance_vlm":
         from examples.compliance_vlm import ComplianceVLMPolicy
 
+        replay_path = str(parsed.replay).strip()
+        if replay_path:
+            replay_path = _resolve_repo_path(replay_path)
         policy = ComplianceVLMPolicy(
             **policy_kwargs,
-            ip=str(parsed.ip),
-            sim=str(parsed.sim),
-            vis=vis_enabled,
             object=str(parsed.object),
             site_names=str(parsed.site_names),
+            replay=replay_path,
         )
     else:
         raise ValueError(f"Unsupported policy: {parsed.policy}")

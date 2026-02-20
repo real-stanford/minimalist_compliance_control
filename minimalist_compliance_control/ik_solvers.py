@@ -12,8 +12,6 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
 
-JointToActuatorFn = Callable[[npt.NDArray[np.float32]], npt.NDArray[np.float32]]
-
 
 def _filter_existing_geom_names(
     model: mujoco.MjModel, geom_names: Sequence[str]
@@ -89,7 +87,7 @@ class MinkIK:
         model: mujoco.MjModel,
         site_names: Sequence[str],
         joint_indices: npt.NDArray[np.int32],
-        joint_to_actuator_fn: JointToActuatorFn,
+        joint_to_actuator_fn: Callable,
         ik_position_only: bool,
         source_q_start_idx: int,
         hand_orientation_cost_default: float = 10.0,

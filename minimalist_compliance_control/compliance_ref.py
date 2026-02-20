@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import gin
 import mujoco
@@ -11,7 +11,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
 
-from minimalist_compliance_control.ik_solvers import JointToActuatorFn, MinkIK
+from minimalist_compliance_control.ik_solvers import MinkIK
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,8 @@ class ComplianceReference:
         site_names: Sequence[str],
         actuator_indices: npt.NDArray[np.int32],
         joint_indices: npt.NDArray[np.int32],
-        joint_to_actuator_fn: JointToActuatorFn,
+        joint_to_actuator_fn: Callable,
+        actuator_to_joint_fn: Callable,
         default_motor_pos: npt.NDArray[np.float32],
         default_qpos: npt.NDArray[np.float32],
         fixed_model_xml_path: Optional[str],
@@ -90,6 +91,7 @@ class ComplianceReference:
         self.actuator_indices = np.asarray(actuator_indices, dtype=np.int32)
         self.joint_indices = np.asarray(joint_indices, dtype=np.int32)
         self.joint_to_actuator_fn = joint_to_actuator_fn
+        self.actuator_to_joint_fn = actuator_to_joint_fn
 
         self.default_motor_pos = np.asarray(default_motor_pos, dtype=np.float32)
         self.default_qpos = np.asarray(default_qpos, dtype=np.float32)
@@ -132,6 +134,45 @@ class ComplianceReference:
 
         default_state = self.get_default_state()
         self.site_home_pose = np.asarray(default_state.x_ref, dtype=np.float32).copy()
+
+    def get_x_ref_from_motor_pos(
+        self, motor_pos: npt.NDArray[np.float32]
+    ) -> npt.NDArray[np.float32]:
+        """Compute world-frame site pose references for a given motor position."""
+        motor_arr = np.asarray(motor_pos, dtype=np.float32).reshape(-1)
+        if int(np.max(self.actuator_indices)) >= int(motor_arr.shape[0]):
+            raise ValueError(
+                f"motor_pos length {motor_arr.shape[0]} does not cover actuator indices."
+            )
+
+        qpos = np.asarray(self.default_qpos, dtype=np.float32).copy()
+        qpos_indices = int(self.q_start_idx) + self.joint_indices
+        if int(np.min(qpos_indices)) < 0 or int(np.max(qpos_indices)) >= int(
+            qpos.shape[0]
+        ):
+            raise ValueError("Computed qpos indices are out of bounds.")
+
+        actuator_pos = np.asarray(motor_arr[self.actuator_indices], dtype=np.float32)
+        joint_pos = np.asarray(
+            self.actuator_to_joint_fn(actuator_pos), dtype=np.float32
+        )
+        if joint_pos.shape != self.joint_indices.shape:
+            raise ValueError(
+                f"actuator_to_joint_fn returned shape {joint_pos.shape}, "
+                f"expected {self.joint_indices.shape}."
+            )
+        qpos[qpos_indices] = joint_pos
+
+        data = mujoco.MjData(self.model)
+        data.qpos[:] = qpos
+        mujoco.mj_forward(self.model, data)
+
+        x_ref = np.zeros((len(self.site_names), 6), dtype=np.float32)
+        for idx, site_id in enumerate(self.site_ids):
+            x_ref[idx, 0:3] = np.asarray(data.site(site_id).xpos, dtype=np.float32)
+            rotmat = np.asarray(data.site(site_id).xmat, dtype=np.float32).reshape(3, 3)
+            x_ref[idx, 3:6] = R.from_matrix(rotmat).as_rotvec().astype(np.float32)
+        return x_ref
 
     def get_default_state(self) -> ComplianceState:
         num_sites = len(self.site_names)

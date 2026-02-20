@@ -66,13 +66,13 @@ LEAP_WORKSPACE_SIZE_BY_SITE: Dict[str, np.ndarray] = {
 }
 
 CAMERA_EXTRINSICS_BY_VARIANT = {
-    "leap_hand": LEAP_CAMERA_EXTRINSICS,
-    "toddlerbot_2xm": TODDY_CAMERA_EXTRINSICS,
+    "leap": LEAP_CAMERA_EXTRINSICS,
+    "toddlerbot": TODDY_CAMERA_EXTRINSICS,
 }
 
 WORKSPACE_SIZE_BY_VARIANT = {
-    "leap_hand": LEAP_WORKSPACE_SIZE_BY_SITE,
-    "toddlerbot_2xm": TODDY_WORK_SPACE_SIZE,
+    "leap": LEAP_WORKSPACE_SIZE_BY_SITE,
+    "toddlerbot": TODDY_WORK_SPACE_SIZE,
 }
 
 # TODO: remove the hard code
@@ -87,8 +87,8 @@ TODDY_EE_LOCATIONS: Dict[str, np.ndarray] = {
     "right_hand_center": np.array([0.0, -0.0, 0.1], dtype=np.float32),
 }
 EE_LOCATIONS_BY_VARIANT = {
-    "leap_hand": LEAP_EE_LOCATIONS,
-    "toddlerbot_2xm": TODDY_EE_LOCATIONS,
+    "leap": LEAP_EE_LOCATIONS,
+    "toddlerbot": TODDY_EE_LOCATIONS,
 }
 
 

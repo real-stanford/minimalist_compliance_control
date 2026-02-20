@@ -5,7 +5,6 @@ This keeps the old policy class structure but removes toddlerbot dependencies.
 
 from __future__ import annotations
 
-import argparse
 import multiprocessing as mp
 import os
 import queue
@@ -16,7 +15,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Tuple
 
 import cv2
 import joblib
@@ -54,19 +53,6 @@ class DPConfig:
             obs_source=model.obs_source,
             action_source=model.action_source,
         )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Compliance DP policy")
-    parser.add_argument("--ckpt", type=str, required=True)
-    parser.add_argument("--dt", type=float, default=0.02)
-    parser.add_argument("--num-sites", type=int, default=0)
-    parser.add_argument("--image-height", type=int, default=96)
-    parser.add_argument("--image-width", type=int, default=96)
-    parser.add_argument("--kp-pos", type=float, default=100.0)
-    parser.add_argument("--kp-rot", type=float, default=10.0)
-    parser.add_argument("--use-camera-stream", action="store_true")
-    return parser
 
 
 def put_latest(queue_obj: mp.Queue, payload) -> None:
@@ -134,10 +120,6 @@ class ComplianceDPPolicy(CompliancePolicy):
         robot: str,
         init_motor_pos: npt.ArrayLike,
         ckpt: str = "",
-        ip: str = "",
-        sim: str = "real",
-        vis: bool = False,
-        plot: bool = False,
         dt: float = 0.02,
         num_sites: int = 0,
         image_height: int = 96,
@@ -145,17 +127,11 @@ class ComplianceDPPolicy(CompliancePolicy):
         kp_pos: float = 100.0,
         kp_rot: float = 10.0,
         use_camera_stream: bool = False,
-        **kwargs: Any,
     ) -> None:
         super().__init__(
             name=name,
             robot=robot,
             init_motor_pos=init_motor_pos,
-            ip=ip,
-            sim=sim,
-            vis=vis,
-            plot=plot,
-            **kwargs,
         )
         if not ckpt:
             raise ValueError("ComplianceDPPolicy requires ckpt path.")
@@ -163,15 +139,6 @@ class ComplianceDPPolicy(CompliancePolicy):
         self.use_camera_stream = bool(use_camera_stream)
         self.image_height = int(image_height)
         self.image_width = int(image_width)
-        self.args = argparse.Namespace(
-            ckpt=str(ckpt),
-            dt=float(dt),
-            num_sites=int(num_sites),
-            image_height=self.image_height,
-            image_width=self.image_width,
-            kp_pos=float(kp_pos),
-            kp_rot=float(kp_rot),
-        )
 
         if int(num_sites) > 0 and int(num_sites) != self.num_sites:
             raise ValueError(
@@ -287,34 +254,6 @@ class ComplianceDPPolicy(CompliancePolicy):
         self.image_deque = deque([], maxlen=int(cfg.get("image_horizon", 1)))
 
         self._closed = False
-
-    @classmethod
-    def from_argv(
-        cls,
-        argv: Sequence[str],
-        *,
-        robot: str,
-        sim: str,
-        vis: bool,
-        plot: bool,
-    ) -> "ComplianceDPPolicy":
-        args = build_parser().parse_args(list(argv))
-        return cls(
-            name="compliance_dp",
-            robot=robot,
-            init_motor_pos=np.zeros(0, dtype=np.float32),
-            sim=sim,
-            vis=vis,
-            plot=plot,
-            ckpt=args.ckpt,
-            dt=args.dt,
-            num_sites=args.num_sites,
-            image_height=args.image_height,
-            image_width=args.image_width,
-            kp_pos=args.kp_pos,
-            kp_rot=args.kp_rot,
-            use_camera_stream=args.use_camera_stream,
-        )
 
     def _read_config_from_process(self, timeout_s: float = 30.0) -> dict[str, Any]:
         deadline = time.monotonic() + float(timeout_s)

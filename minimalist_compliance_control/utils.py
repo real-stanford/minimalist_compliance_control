@@ -21,6 +21,25 @@ AXIS_BINDINGS = {
     "z": (2, -1),
 }
 VALID_KEYBOARD_COMMANDS = {"c", "l", "r", "b"}
+AXIS_KEY_PAIRS = (("w", "x", "x"), ("a", "d", "y"), ("q", "z", "z"))
+SPECIAL_KEY_HELP = {
+    "p": "toggle pos/rot",
+    "n": "next site",
+    "r": "reset site",
+    "f": "toggle random force",
+}
+
+ANSI_BOLD_CYAN = "\033[1;36m"
+ANSI_RESET = "\033[0m"
+
+
+def _style_help_line(text: str) -> str:
+    if not sys.stdout.isatty():
+        return text
+    term = os.environ.get("TERM", "").lower()
+    if term in ("", "dumb"):
+        return text
+    return f"{ANSI_BOLD_CYAN}{text}{ANSI_RESET}"
 
 
 def _symmetrize(matrix: npt.ArrayLike) -> npt.NDArray[np.float32]:
@@ -145,6 +164,7 @@ class KeyboardTeleop:
         site_names: Optional[Sequence[str]] = None,
         pos_step: float = 0.01,
         rot_step_deg: float = 5.0,
+        show_help: bool = True,
     ) -> None:
         self.num_sites = int(num_sites)
         if site_names is None:
@@ -161,8 +181,94 @@ class KeyboardTeleop:
         self.active_idx = 0
         self.rotation_mode = False
         self.force_perturbation_enabled = False
+        self.default_controls_enabled = True
         self.pos_offsets = np.zeros((self.num_sites, 3), dtype=np.float32)
         self.rot_offsets = np.zeros((self.num_sites, 3), dtype=np.float32)
+        self._command_bindings: dict[str, str] = {}
+        self._command_help: dict[str, str] = {}
+        self._command_queue: list[str] = []
+        if show_help:
+            self.print_help()
+
+    def _format_help_parts(self) -> list[str]:
+        command_keys = set(self._command_bindings.keys())
+        parts: list[str] = []
+
+        if self.default_controls_enabled:
+            for pos_key, neg_key, axis_name in AXIS_KEY_PAIRS:
+                pos_taken = pos_key in command_keys
+                neg_taken = neg_key in command_keys
+                if not pos_taken and not neg_taken:
+                    parts.append(f"{pos_key}/{neg_key}:+/-{axis_name}")
+                elif not pos_taken:
+                    parts.append(f"{pos_key}:+{axis_name}")
+                elif not neg_taken:
+                    parts.append(f"{neg_key}:-{axis_name}")
+
+            for key, desc in SPECIAL_KEY_HELP.items():
+                if key == "n" and self.num_sites <= 1:
+                    continue
+                if key in command_keys:
+                    continue
+                parts.append(f"{key}={desc}")
+
+        for key in sorted(command_keys):
+            parts.append(
+                f"{key}={self._command_help.get(key, self._command_bindings[key])}"
+            )
+
+        return parts
+
+    def print_help(self, prefix: str = "[teleop]") -> None:
+        parts = self._format_help_parts()
+        if parts:
+            print(_style_help_line(f"{prefix} keys: " + ", ".join(parts)))
+        print(
+            _style_help_line(
+                f"{prefix} focus the terminal (stdin) for keyboard controls."
+            )
+        )
+
+    def set_default_controls_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self.default_controls_enabled = bool(enabled)
+            if not self.default_controls_enabled:
+                self.rotation_mode = False
+                self.force_perturbation_enabled = False
+
+    def set_command_bindings(
+        self,
+        bindings: Optional[dict[str, str]] = None,
+        help_labels: Optional[dict[str, str]] = None,
+        enable_default_controls: Optional[bool] = None,
+    ) -> None:
+        with self._lock:
+            if enable_default_controls is not None:
+                self.default_controls_enabled = bool(enable_default_controls)
+                if not self.default_controls_enabled:
+                    self.rotation_mode = False
+                    self.force_perturbation_enabled = False
+            self._command_bindings.clear()
+            self._command_help.clear()
+            self._command_queue.clear()
+            if bindings is None:
+                return
+            for key, command in bindings.items():
+                key_norm = str(key).lower().strip()
+                command_norm = str(command).lower().strip()
+                if len(key_norm) != 1 or len(command_norm) == 0:
+                    continue
+                self._command_bindings[key_norm] = command_norm
+                if help_labels is not None and key in help_labels:
+                    label = str(help_labels[key]).strip()
+                    if label:
+                        self._command_help[key_norm] = label
+
+    def poll_command(self) -> Optional[str]:
+        with self._lock:
+            if not self._command_queue:
+                return None
+            return self._command_queue.pop(0)
 
     def _print_target(self) -> None:
         idx = self.active_idx
@@ -178,6 +284,12 @@ class KeyboardTeleop:
     def handle_char(self, char: str) -> None:
         c = char.lower()
         with self._lock:
+            command = self._command_bindings.get(c)
+            if command is not None:
+                self._command_queue.append(command)
+                return
+            if not self.default_controls_enabled:
+                return
             if c == "p":
                 self.rotation_mode = not self.rotation_mode
                 mode = "rotation" if self.rotation_mode else "position"
@@ -296,15 +408,36 @@ class KeyboardCommand:
 class KeyboardControlReceiver:
     """Non-blocking stdin receiver for single-char keyboard commands."""
 
-    def __init__(self, port: int = 5592) -> None:
+    def __init__(
+        self,
+        port: int = 5592,
+        valid_commands: Optional[Iterable[str]] = None,
+        name: str = "model_based",
+        help_labels: Optional[dict[str, str]] = None,
+    ) -> None:
         _ = port
         self.enabled = False
         self._fd: Optional[int] = None
         self._old_term_settings = None
+        self.name = str(name).strip() or "keyboard"
+        if valid_commands is None:
+            self.valid_commands = set(VALID_KEYBOARD_COMMANDS)
+        else:
+            parsed = {str(c).lower().strip() for c in valid_commands}
+            self.valid_commands = {c for c in parsed if len(c) == 1}
+            if not self.valid_commands:
+                self.valid_commands = set(VALID_KEYBOARD_COMMANDS)
+        self._help_labels: dict[str, str] = {}
+        if help_labels is not None:
+            for key, label in help_labels.items():
+                key_norm = str(key).lower().strip()
+                label_norm = str(label).strip()
+                if len(key_norm) == 1 and label_norm:
+                    self._help_labels[key_norm] = label_norm
 
         if not sys.stdin.isatty():
             warnings.warn(
-                "Model-based keyboard control disabled: stdin is not a TTY.",
+                f"{self.name} keyboard control disabled: stdin is not a TTY.",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -315,7 +448,7 @@ class KeyboardControlReceiver:
             tty.setcbreak(self._fd)
         except Exception as exc:
             warnings.warn(
-                f"Model-based keyboard control disabled: failed to configure stdin ({exc}).",
+                f"{self.name} keyboard control disabled: failed to configure stdin ({exc}).",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -324,8 +457,13 @@ class KeyboardControlReceiver:
             return
 
         self.enabled = True
-        print("[model_based] Keyboard control active on stdin (c/l/r/b).")
-        print("[model_based] Focus terminal to send model-based commands.")
+        parts = []
+        for cmd in sorted(self.valid_commands):
+            label = self._help_labels.get(cmd, "")
+            parts.append(f"{cmd}={label}" if label else cmd)
+        controls = ", ".join(parts)
+        print(_style_help_line(f"[{self.name}] keys: {controls}"))
+        print(_style_help_line(f"[{self.name}] focus terminal to send commands."))
 
     def close(self) -> None:
         if self._fd is not None and self._old_term_settings is not None:
@@ -360,7 +498,7 @@ class KeyboardControlReceiver:
         cmd: Optional[str] = None
         for ch in raw.decode(errors="ignore").lower():
             c = ch.strip()
-            if c in VALID_KEYBOARD_COMMANDS:
+            if c in self.valid_commands:
                 cmd = c
         if cmd is None:
             return None

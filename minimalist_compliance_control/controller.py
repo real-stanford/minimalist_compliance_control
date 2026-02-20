@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
 import gin
-import mujoco
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
@@ -131,20 +130,6 @@ class ComplianceController:
             for name in self.config.site_names
         }
 
-    def get_head_pose(self) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-        model = self.wrench_sim.model
-        data = self.wrench_sim.data
-        head_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "head")
-        if head_bid < 0:
-            head_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "torso")
-        if head_bid < 0:
-            return np.zeros(3, dtype=np.float32), np.array(
-                [1.0, 0.0, 0.0, 0.0], dtype=np.float32
-            )
-        head_pos = np.asarray(data.xpos[head_bid], dtype=np.float32)
-        head_quat = np.asarray(data.xquat[head_bid], dtype=np.float32)
-        return head_pos, head_quat
-
     def get_x_obs(self) -> npt.NDArray[np.float32]:
         num_sites = len(self.config.site_names)
         x_obs = np.zeros((num_sites, 6), dtype=np.float32)
@@ -240,6 +225,20 @@ class ComplianceController:
                 out = out + bias
             return out
 
+        def actuator_to_joint_fn(
+            actuator_pos: npt.NDArray[np.float32],
+        ) -> npt.NDArray[np.float32]:
+            out = np.asarray(actuator_pos, dtype=np.float32)
+            if bias is not None:
+                out = out - bias
+            if scale is not None:
+                if np.any(np.abs(scale) < 1e-8):
+                    raise ValueError(
+                        "Cannot invert joint_to_actuator mapping with near-zero scale."
+                    )
+                out = out / scale
+            return out
+
         default_qpos = (
             np.asarray(cfg.default_qpos, dtype=np.float32)
             if cfg.default_qpos is not None
@@ -259,6 +258,7 @@ class ComplianceController:
             actuator_indices=actuator_indices,
             joint_indices=joint_indices,
             joint_to_actuator_fn=joint_to_actuator_fn,
+            actuator_to_joint_fn=actuator_to_joint_fn,
             default_motor_pos=default_motor_pos,
             default_qpos=default_qpos,
             fixed_model_xml_path=cfg.fixed_model_xml_path,

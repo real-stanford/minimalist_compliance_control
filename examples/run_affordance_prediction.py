@@ -22,10 +22,6 @@ ASSETS_DIR = Path("assets")
 DEFAULT_OUTPUT_ROOT = Path("results")
 ROBOT_CHOICES = ("toddlerbot", "leap")
 TASK_CHOICES = ("wipe", "draw")
-ROBOT_VARIANT_MAP = {
-    "toddlerbot": "toddlerbot_2xm",
-    "leap": "leap_hand",
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,7 +88,7 @@ def planning_gains(
 
 def default_head_pose(robot: str) -> Tuple[np.ndarray, np.ndarray]:
     if robot == "leap":
-        head_position_world = np.array([-0.1752, 0.117, 0.0625], dtype=np.float32)
+        head_position_world = np.array([-0.12, -0.117, 0.167], dtype=np.float32)
         head_quaternion_world_wxyz = R.from_euler(
             "xyz", [0.0, -np.pi / 3, 0.0]
         ).as_quat(scalar_first=True)
@@ -188,7 +184,6 @@ def save_run_args(
     out_path: Path,
     *,
     robot: str,
-    robot_variant: str,
     task: str,
     object_label: str,
     site_names: List[str],
@@ -200,7 +195,6 @@ def save_run_args(
 ) -> None:
     payload = {
         "robot": robot,
-        "robot_variant": robot_variant,
         "task": task,
         "object": object_label,
         "site": site_names,
@@ -221,7 +215,6 @@ def main() -> None:
     args = parse_args()
     robot = args.robot
     task = args.task
-    robot_variant = ROBOT_VARIANT_MAP[robot]
     object_label = (
         args.object.strip() if args.object.strip() else default_object_label(task)
     )
@@ -265,7 +258,6 @@ def main() -> None:
             save_run_args(
                 output_dir / "args.json",
                 robot=robot,
-                robot_variant=robot_variant,
                 task=task,
                 object_label=object_label,
                 site_names=site_names,
@@ -285,7 +277,7 @@ def main() -> None:
                 prediction = predictor.predict(
                     left_image=left_image,
                     right_image=right_image,
-                    robot_name=robot_variant,
+                    robot_name=robot,
                     site_names=site_names,
                     is_wiping=is_wiping,
                     output_dir=str(output_dir),
@@ -325,7 +317,8 @@ def main() -> None:
                 pose_cur=pose_cur,
                 output_dir=str(output_dir),
                 tool=tool,
-                robot_name=robot_variant,
+                robot_name=robot,
+                task=task,
             )
             print(
                 f"[AffordanceRun] Planned trajectory for sites: {list(trajectory.keys())}"

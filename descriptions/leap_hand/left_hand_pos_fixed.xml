@@ -234,7 +234,8 @@ interphalangeal} joints.
   </sensor>
 
   <worldbody>
-    <body name="palm" pos="0 0 0.1" quat="0 1 0 0">
+    <body name="palm" pos="0 0 0.25" quat="1 0 0 0">
+      <site name="palm_root" pos="-0.1752 -0.117 0.0375" type="sphere" size="0.004" rgba="0.9 0.3 0.3 1"/>
       <!-- palm -->
       <inertial pos="-0.12546 -0.047739 0.015867" quat="0.423786 0.570263 -0.402758 0.577054" mass="0.235"
         diaginertia="0.000405067 0.000304529 0.000179484"/>
@@ -297,7 +298,7 @@ interphalangeal} joints.
               <geom name="if_ds_collision_3" size="0.007 0.011 0.002" pos="0 -0.006 -0.001" type="box" class="collision"/>
 
               <geom name="if_tip" class="tip"/>
-              <site name="if_tip" pos="-0.01 -0.045 0.015" quat="-0.5 -0.5 0.5 0.5" type="sphere" size="0.004"
+              <site name="if_tip" pos="-0.01 -0.035 0.015" quat="-0.5 -0.5 0.5 0.5" type="sphere" size="0.004"
                 rgba="0.9 0.3 0.3 1"/>
             </body>
 
@@ -350,7 +351,7 @@ interphalangeal} joints.
               <geom name="mf_ds_collision_3" size="0.007 0.011 0.002" pos="0 -0.006 -0.001" type="box" class="collision"/>
 
               <geom name="mf_tip" class="tip"/>
-              <site name="mf_tip" pos="-0.01 -0.045 0.015" quat="-0.5 -0.5 0.5 0.5" type="sphere" size="0.004"
+              <site name="mf_tip" pos="-0.01 -0.035 0.015" quat="-0.5 -0.5 0.5 0.5" type="sphere" size="0.004"
                 rgba="0.3 0.9 0.3 1"/>
             </body>
 
@@ -403,7 +404,7 @@ interphalangeal} joints.
               <geom name="rf_ds_collision_3" size="0.007 0.011 0.002" pos="0 -0.006 -0.001" type="box" class="collision"/>
 
               <geom name="rf_tip" class="tip"/>
-              <site name="rf_tip" pos="-0.01 -0.045 0.015" quat="-0.5 -0.5 0.5 0.5" type="sphere" size="0.004"
+              <site name="rf_tip" pos="-0.01 -0.035 0.015" quat="-0.5 -0.5 0.5 0.5" type="sphere" size="0.004"
                 rgba="0.3 0.3 0.9 1"/>
             </body>
 
@@ -454,7 +455,7 @@ interphalangeal} joints.
                 class="collision"/>
 
               <geom name="th_tip" class="thumb_tip"/>
-              <site name="th_tip" pos="-0.01 -0.055 -0.015" quat="-0.5 -0.5 0.5 0.5" type="sphere" size="0.004"
+              <site name="th_tip" pos="-0.01 -0.045 -0.015" quat="-0.5 -0.5 0.5 0.5" type="sphere" size="0.004"
                 rgba="0.9 0.6 0.2 1"/>
             </body>
 
