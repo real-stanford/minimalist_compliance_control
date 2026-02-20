@@ -249,22 +249,22 @@ motors:
         kp: 900.0
         kd: 0.0
         ki: 0.0
-    left_gripper_rack:
-        motor: XC330
-        group: arm
-        zero_pos: 0
-        home_pos: 0
-        kp: 200.0
-        kd: 0.0
-        ki: 0.0
-    right_gripper_rack:
-        motor: XC330
-        group: arm
-        zero_pos: 0
-        home_pos: 0
-        kp: 200.0
-        kd: 0.0
-        ki: 0.0
+    # left_gripper_rack:
+    #     motor: XC330
+    #     group: arm
+    #     zero_pos: 0
+    #     home_pos: 0
+    #     kp: 200.0
+    #     kd: 0.0
+    #     ki: 0.0
+    # right_gripper_rack:
+    #     motor: XC330
+    #     group: arm
+    #     zero_pos: 0
+    #     home_pos: 0
+    #     kp: 200.0
+    #     kd: 0.0
+    #     ki: 0.0
 
 actuators:
     kp_ratio: 150.0

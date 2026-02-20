@@ -20,7 +20,6 @@ import numpy as np
 import yaml
 
 from examples.base_sim import Obs
-from examples.real_world import RealWorld
 from examples.sim import MuJoCoSim, build_site_force_applier
 from minimalist_compliance_control.controller import ControllerConfig
 
@@ -94,6 +93,8 @@ def _build_sim(
             merged_config=merged_config,
         )
     else:
+        from examples.real_world import RealWorld
+
         return RealWorld(
             robot=str(args.robot),
             control_dt=control_dt,
@@ -141,6 +142,7 @@ class ResultRecorder:
 def run_policy(sim: Any, robot: str, policy: Any) -> None:
     control_dt = float(getattr(sim, "control_dt", 0.02))
     next_tick = time.monotonic()
+    start_time: float | None = None
 
     recorder = ResultRecorder(
         enabled=True,
@@ -155,6 +157,9 @@ def run_policy(sim: Any, robot: str, policy: Any) -> None:
                 break
 
             obs = sim.get_observation()
+            if start_time is None:
+                start_time = float(obs.time)
+            obs.time -= start_time
             action = policy.step(obs, sim)
             action_arr = np.asarray(action, dtype=np.float32)
 
@@ -247,6 +252,12 @@ def main(args: Sequence[str] | None = None) -> None:
         xml_path=xml_path,
         merged_config=merged_config,
     )
+
+    if parsed.sim == "mujoco":
+        init_motor_pos = sim.get_observation().motor_pos
+    elif parsed.sim == "real":
+        init_motor_pos = sim.get_observation(retries=-1).motor_pos
+
     init_motor_pos = np.asarray(sim.get_observation().motor_pos, dtype=np.float32)
 
     policy_name = str(parsed.policy)

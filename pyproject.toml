@@ -42,6 +42,7 @@ examples = [
   "torchvision",
   "diffusers",
   "lz4",
+  "Jetson.GPIO",
   "joblib",
   "pyzmq",
   "requests",

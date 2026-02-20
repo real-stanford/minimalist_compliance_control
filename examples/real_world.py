@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 from types import ModuleType
 from typing import Any, Dict, Sequence
 
+import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
@@ -32,6 +33,23 @@ def _import_dynamixel_cpp() -> ModuleType:
         raise
 
 
+def _resolve_robot_xml_root(xml_path: str) -> ET.Element:
+    """Resolve robot XML root from a scene XML that directly includes robot XML."""
+    scene_root = ET.parse(xml_path).getroot()
+    include_elem = scene_root.find(".//include")
+    if include_elem is None:
+        return scene_root
+
+    include_file = include_elem.attrib.get("file", "")
+    if not include_file:
+        return scene_root
+
+    include_path = os.path.abspath(
+        os.path.join(os.path.dirname(xml_path), include_file)
+    )
+    return ET.parse(include_path).getroot()
+
+
 class RealWorld(BaseSim):
     """Real-world backend with old toddlerbot-style motor/IMU processing."""
 
@@ -44,6 +62,7 @@ class RealWorld(BaseSim):
     ) -> None:
         self.name = "real_world"
         self.robot_name = str(robot)
+        self.xml_path = str(xml_path)
         self.is_toddlerbot = "toddlerbot" in self.robot_name.lower()
         self.control_dt = float(control_dt)
 
@@ -54,13 +73,22 @@ class RealWorld(BaseSim):
         motors_cfg = self.config.get("motors", {})
         if not isinstance(motors_cfg, dict) or not motors_cfg:
             raise ValueError("Merged motor config is empty.")
-        self.motor_ordering = list(motors_cfg.keys())
+        robot_root = _resolve_robot_xml_root(xml_path)
+        self.motor_ordering = [
+            motor_name
+            for motor_name in motors_cfg
+            if robot_root.find(f".//joint[@name='{motor_name}']") is not None
+        ]
+        if not self.motor_ordering:
+            raise ValueError(
+                f"No motor joints from merged config found in XML tree: {xml_path}"
+            )
 
         actuators_cfg = self.config.get("actuators", {})
         if not isinstance(actuators_cfg, dict):
             actuators_cfg = {}
         self.gain_backdrive = float(actuators_cfg.get("gain_backdrive", 1.0))
-        self.use_balance = bool(self.config.get("robot", {}).get("use_balance", True))
+        self.use_balance = bool(self.config.get("robot", {}).get("use_balance", False))
 
         self.motor_groups: np.ndarray = np.asarray(
             [str(motors_cfg[name].get("group", "arm")) for name in self.motor_ordering],
@@ -148,17 +176,16 @@ class RealWorld(BaseSim):
             dtype=np.int32,
         )
         n_motor = len(self.motor_ordering)
-        if motor_ids_flat.size == n_motor and np.array_equal(
-            np.sort(motor_ids_flat), np.arange(n_motor, dtype=np.int32)
-        ):
-            self.motor_sort_idx = np.argsort(motor_ids_flat)
-            self.motor_unsort_idx = motor_ids_flat.copy()
-        else:
-            self.motor_sort_idx = np.arange(n_motor, dtype=np.int32)
-            self.motor_unsort_idx = np.arange(n_motor, dtype=np.int32)
-            print(
-                "[real_world] Motor IDs are not a 0..N-1 permutation; using identity ordering."
+        if motor_ids_flat.size != n_motor:
+            raise ValueError(
+                f"Motor ID count {motor_ids_flat.size} != configured motor count {n_motor}."
             )
+        if np.unique(motor_ids_flat).size != n_motor:
+            raise ValueError(
+                "Motor IDs contain duplicates; cannot build stable ordering."
+            )
+        self.motor_sort_idx = np.argsort(motor_ids_flat)
+        self.motor_unsort_idx = np.argsort(self.motor_sort_idx)
 
         self.motor_lens = [len(self.motor_ids[key]) for key in sorted(self.motor_ids)]
         self.motor_split_idx = np.cumsum(self.motor_lens)[:-1]
@@ -178,7 +205,7 @@ class RealWorld(BaseSim):
             print(f"Failed to read current limits: {exc}")
 
         self.drive_state = np.ones(len(self.motor_ordering), dtype=np.float32)
-        self._build_motor_joint_maps(xml_path)
+        self._build_motor_to_qpos_map(robot_root)
 
         if self.imu is not None:
             imu_data = self.imu.get_latest_state()
@@ -295,42 +322,38 @@ class RealWorld(BaseSim):
             (gain * tau_est).astype(np.float32),
         )
 
-    def _get_transmission(self, motor_name: str) -> str:
-        if motor_name.endswith("_drive"):
-            return "spur_gear"
-        if motor_name.endswith("_act"):
-            return "parallel_linkage"
-        if re.search(r"_act_[12]$", motor_name):
-            return "bevel_gear"
-        if motor_name.endswith("_rack"):
-            return "rack_and_pinion"
-        return "none"
-
-    def _build_motor_joint_maps(self, xml_path: str) -> None:
+    def _build_motor_to_qpos_map(self, xml_root: ET.Element) -> None:
         nu = len(self.motor_ordering)
         motor_index = {name: idx for idx, name in enumerate(self.motor_ordering)}
-        motor_gear_ratios = {name: 1.0 for name in self.motor_ordering}
 
-        xml_root = None
-        try:
-            xml_root = ET.parse(xml_path).getroot()
-        except Exception:
-            xml_root = None
-        if xml_root is not None:
-            for motor_name in self.motor_ordering:
-                elem = xml_root.find(f".//equality/joint[@joint2='{motor_name}']")
-                if elem is None:
-                    continue
-                polycoef = [
-                    float(x) for x in elem.attrib.get("polycoef", "0 1 0 0 0").split()
-                ]
-                if len(polycoef) >= 2:
-                    motor_gear_ratios[motor_name] = float(polycoef[1])
+        def get_transmission(motor_name: str) -> str:
+            if motor_name.endswith("_drive"):
+                return "spur_gear"
+            if motor_name.endswith("_act"):
+                return "parallel_linkage"
+            if re.search(r"_act_[12]$", motor_name):
+                return "bevel_gear"
+            if motor_name.endswith("_rack"):
+                return "rack_and_pinion"
+            return "none"
+
+        def get_gear_ratio(name: str) -> float:
+            joint_equality = xml_root.find(f".//equality/joint[@joint2='{name}']")
+            if joint_equality is None:
+                return 1.0
+            polycoef = joint_equality.attrib.get("polycoef", "0 1 0 0 0").split()
+            if len(polycoef) < 2:
+                return 1.0
+            return float(polycoef[1])
+
+        motor_gear_ratios = {
+            motor_name: get_gear_ratio(motor_name) for motor_name in self.motor_ordering
+        }
 
         bevel_motor_names = [
             name
             for name in self.motor_ordering
-            if self._get_transmission(name) == "bevel_gear"
+            if get_transmission(name) == "bevel_gear"
         ]
         if bevel_motor_names:
             bevel_motor_names.sort(
@@ -346,7 +369,7 @@ class RealWorld(BaseSim):
 
         motor_to_joint_map: dict[str, tuple[str, float]] = {}
         for motor_name in self.motor_ordering:
-            transmission = self._get_transmission(motor_name)
+            transmission = get_transmission(motor_name)
             if transmission == "bevel_gear":
                 continue
             if transmission == "spur_gear":
@@ -367,7 +390,7 @@ class RealWorld(BaseSim):
         bevel_pending = False
         bevel_added = False
         for motor_name in self.motor_ordering:
-            transmission = self._get_transmission(motor_name)
+            transmission = get_transmission(motor_name)
             if transmission == "bevel_gear":
                 if not bevel_pending:
                     bevel_pending = True
@@ -445,19 +468,18 @@ class RealWorld(BaseSim):
             joint_idx = joint_name_to_index[joint_name]
             dof_idx = dof_index[joint_name + "_mirror"]
             motor_to_dof_mat[dof_idx] = motor_to_joint_mat[joint_idx]
-
         self._motor_to_dof_mat = motor_to_dof_mat
-        self._dof_names = dof_names
-        self._has_floating_base = (
-            "leap" not in self.robot_name.lower()
-            and "arx" not in self.robot_name.lower()
-        )
-        self._qpos_start_idx = 7 if self._has_floating_base else 0
-        self._qvel_start_idx = 6 if self._has_floating_base else 0
-        self._qpos_dim = self._qpos_start_idx + len(self._dof_names)
-        self._qvel_dim = self._qvel_start_idx + len(self._dof_names)
+        model = mujoco.MjModel.from_xml_path(self.xml_path)
+        self._qpos_dim = int(model.nq)
+        self._qvel_dim = int(model.nv)
         self._qpos_base = np.zeros(self._qpos_dim, dtype=np.float32)
-        if self._has_floating_base:
+
+        self._has_floating_base = bool(
+            np.any(model.jnt_type == int(mujoco.mjtJoint.mjJNT_FREE))
+        )
+        if int(model.nkey) > 0:
+            self._qpos_base = np.asarray(model.key_qpos[0], dtype=np.float32)
+        elif self._has_floating_base and self._qpos_dim >= 7:
             base_pos = np.asarray(
                 self.config.get("kinematics", {}).get("zero_pos", [0.0, 0.0, 0.0]),
                 dtype=np.float32,
@@ -465,6 +487,52 @@ class RealWorld(BaseSim):
             if base_pos.size >= 3:
                 self._qpos_base[:3] = base_pos[:3]
             self._qpos_base[3] = 1.0
+
+        qpos_joint_idx: list[int] = []
+        qvel_joint_idx: list[int] = []
+        dof_src_idx: list[int] = []
+        for joint_name, src_idx in dof_index.items():
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+            if joint_id < 0:
+                continue
+            joint_type = int(model.jnt_type[joint_id])
+            if joint_type not in (
+                int(mujoco.mjtJoint.mjJNT_HINGE),
+                int(mujoco.mjtJoint.mjJNT_SLIDE),
+            ):
+                continue
+            qpos_joint_idx.append(int(model.jnt_qposadr[joint_id]))
+            qvel_joint_idx.append(int(model.jnt_dofadr[joint_id]))
+            dof_src_idx.append(int(src_idx))
+
+        self._qpos_joint_idx = np.asarray(qpos_joint_idx, dtype=np.int32)
+        self._qvel_joint_idx = np.asarray(qvel_joint_idx, dtype=np.int32)
+        self._qmap_dof_idx = np.asarray(dof_src_idx, dtype=np.int32)
+        if (
+            self._qpos_joint_idx.shape[0] != self._qvel_joint_idx.shape[0]
+            or self._qpos_joint_idx.shape[0] != self._qmap_dof_idx.shape[0]
+        ):
+            raise ValueError("Inconsistent qpos/qvel/dof joint mapping dimensions.")
+
+        expected_joint_names: list[str] = []
+        for joint_id in range(int(model.njnt)):
+            joint_type = int(model.jnt_type[joint_id])
+            if joint_type not in (
+                int(mujoco.mjtJoint.mjJNT_HINGE),
+                int(mujoco.mjtJoint.mjJNT_SLIDE),
+            ):
+                continue
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            if name:
+                expected_joint_names.append(name)
+        missing_joint_names = [
+            name for name in expected_joint_names if name not in dof_index
+        ]
+        if missing_joint_names:
+            raise ValueError(
+                "Missing hinge/slide joints in dof mapping: "
+                + ", ".join(missing_joint_names)
+            )
 
     def get_qpos(
         self,
@@ -484,8 +552,8 @@ class RealWorld(BaseSim):
             and np.asarray(root_quat).shape[0] == 4
         ):
             qpos[3:7] = np.asarray(root_quat, dtype=np.float32)
-        end = self._qpos_start_idx + dof_arr.shape[0]
-        qpos[self._qpos_start_idx : end] = dof_arr
+        if self._qpos_joint_idx.size > 0:
+            qpos[self._qpos_joint_idx] = dof_arr[self._qmap_dof_idx]
         return qpos
 
     def get_qvel(self, motor_vel: np.ndarray) -> np.ndarray:
@@ -496,8 +564,8 @@ class RealWorld(BaseSim):
             )
         dof_vel = self._motor_to_dof_mat @ motor_vel_arr
         qvel = np.zeros(self._qvel_dim, dtype=np.float32)
-        end = self._qvel_start_idx + dof_vel.shape[0]
-        qvel[self._qvel_start_idx : end] = dof_vel
+        if self._qvel_joint_idx.size > 0:
+            qvel[self._qvel_joint_idx] = dof_vel[self._qmap_dof_idx]
         return qvel
 
     def get_observation(self, retries: int = 0) -> Obs:

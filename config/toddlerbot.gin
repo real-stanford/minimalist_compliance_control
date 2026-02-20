@@ -60,3 +60,4 @@ ComplianceConfig.balance_yaw = False
 # Motor config paths
 MotorConfigPaths.default_config_path = "descriptions/default.yml"
 MotorConfigPaths.robot_config_path = "descriptions/toddlerbot_2xm/robot.yml"
+MotorConfigPaths.motor_config_path = "descriptions/toddlerbot_2xm/motors.yml"
