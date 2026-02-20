@@ -321,6 +321,8 @@ class ComplianceController:
             else None
         )
         if self.config.base_body_name:
+            import mujoco
+
             base_body_id = mujoco.mj_name2id(
                 self.wrench_sim.model,
                 mujoco.mjtObj.mjOBJ_BODY,

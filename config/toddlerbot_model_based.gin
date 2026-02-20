@@ -1,5 +1,6 @@
+include "config/toddlerbot.gin"
+
 # Overrides for toddlerbot model-based policy.
-# Loaded after config/toddlerbot.gin.
 
 WrenchSimConfig.xml_path = "descriptions/toddlerbot_2xm/scene_ball.xml"
 ControllerConfig.xml_path = "descriptions/toddlerbot_2xm/scene_ball.xml"

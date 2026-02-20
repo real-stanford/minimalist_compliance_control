@@ -12,14 +12,16 @@ import numpy.typing as npt
 import yaml
 from scipy.spatial.transform import Rotation as R
 
+from examples.compliance import CompliancePolicy
 from hybrid_servo.algorithm.ochs import solve_ochs
 from hybrid_servo.algorithm.solvehfvc import HFVC, transform_hfvc_to_global
-from hybrid_servo.tasks.bimanual_ochs import compute_center_quaternion_from_hands
-from hybrid_servo.tasks.bimanual_ochs import compute_ochs_inputs
+from hybrid_servo.tasks.bimanual_ochs import (
+    compute_center_quaternion_from_hands,
+    compute_ochs_inputs,
+)
 from hybrid_servo.tasks.bimanual_ochs import (
     generate_constraint_jacobian as bimanual_generate_constraint_jacobian,
 )
-from examples.compliance import CompliancePolicy
 from hybrid_servo.utils import find_repo_root, sync_compliance_state_to_current_pose
 from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT, ComplianceState
 from minimalist_compliance_control.controller import (
@@ -1632,6 +1634,16 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
 
     def step(self, obs: Any, sim: Any) -> np.ndarray:
         t = float(obs.time)
+        qpos_obs = np.asarray(obs.qpos, dtype=np.float32).reshape(-1)
+        if qpos_obs.shape[0] == int(self.controller.wrench_sim.model.nq):
+            self.controller.sync_qpos(qpos_obs)
+        qvel_obs = np.asarray(obs.qvel, dtype=np.float32).reshape(-1)
+        if qvel_obs.shape[0] == int(self.controller.wrench_sim.model.nv):
+            self.controller.wrench_sim.data.qvel[:] = qvel_obs
+            mujoco.mj_forward(
+                self.controller.wrench_sim.model, self.controller.wrench_sim.data
+            )
+
         ball_pos = self.update_ball_pose_estimate(obs, sim, "real" in sim.name)
         self.ball_pos_estimate_log.append(
             np.asarray(ball_pos, dtype=np.float64).reshape(3).copy()
@@ -1695,8 +1707,11 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
                 )
                 _reset_approach_interp(self.runtime)
                 self.runtime.wrench_command[:] = 0.0
+                current_motor_pos = np.asarray(obs.motor_pos, dtype=np.float64).copy()
                 sync_compliance_state_to_current_pose(
-                    self.controller, self.controller.wrench_sim.data, self.motor_cmd
+                    self.controller,
+                    self.controller.wrench_sim.data,
+                    current_motor_pos,
                 )
                 self.latest_state_ref = self.controller._last_state
                 print("[model_based] Phase transition: kneel -> approach")

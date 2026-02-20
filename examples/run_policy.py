@@ -234,8 +234,13 @@ def main(args: Sequence[str] | None = None) -> None:
         "leap",
     }:
         gin_file = f"{parsed.robot}_vlm.gin"
-    elif str(parsed.policy) == "compliance_model_based" and str(parsed.robot) == "leap":
-        gin_file = "leap_model_based.gin"
+    elif str(parsed.policy) == "compliance_model_based":
+        if str(parsed.robot) == "leap":
+            gin_file = "leap_model_based.gin"
+        elif str(parsed.robot) == "toddlerbot":
+            gin_file = "toddlerbot_model_based.gin"
+        else:
+            gin_file = f"{parsed.robot}.gin"
     elif str(parsed.policy) == "compliance_dp" and str(parsed.robot) == "toddlerbot":
         gin_file = "toddlerbot_dp.gin"
     else:
