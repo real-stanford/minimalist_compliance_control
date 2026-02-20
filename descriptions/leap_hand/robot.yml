@@ -113,9 +113,7 @@ motors:
         kd: 0.0
 
 actuators:
-    kp_ratio: 150.0
-    kd_ratio: 16.0
-    passive_active_ratio: 3.0
+    gain_backdrive: 5.0
     XC330:
         damping: 0.001
         armature: 0.0048

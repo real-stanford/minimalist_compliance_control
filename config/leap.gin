@@ -40,18 +40,18 @@ WrenchEstimateConfig.axis_aligned = False
 WrenchEstimateConfig.normal_axis = "+z"
 
 # Compliance reference (fixed base)
-ComplianceRefConfig.dt = 0.02
-ComplianceRefConfig.q_start_idx = 0
-ComplianceRefConfig.qd_start_idx = 0
-ComplianceRefConfig.ik_position_only = True
-ComplianceRefConfig.fixed_model_xml_path = "descriptions/leap_hand/left_hand_fixed.xml"
-ComplianceRefConfig.mass = 1.0
-ComplianceRefConfig.inertia_diag = (1.0, 1.0, 1.0)
-ComplianceRefConfig.mink_num_iter = 1
-ComplianceRefConfig.mink_damping = 0.1
-ComplianceRefConfig.actuator_indices = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
-ComplianceRefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
-ComplianceRefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+RefConfig.dt = 0.02
+RefConfig.q_start_idx = 0
+RefConfig.qd_start_idx = 0
+RefConfig.ik_position_only = True
+RefConfig.fixed_model_xml_path = "descriptions/leap_hand/left_hand_fixed.xml"
+RefConfig.mass = 1.0
+RefConfig.inertia_diag = (1.0, 1.0, 1.0)
+RefConfig.mink_num_iter = 1
+RefConfig.mink_damping = 0.1
+RefConfig.actuator_indices = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+RefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+RefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 MinkIK.hand_orientation_cost_default = 10.0
 MinkIK.hand_orientation_cost_position_only = 0.0
 MinkIK.site_orientation_cost_overrides = {
@@ -60,17 +60,20 @@ MinkIK.site_orientation_cost_overrides = {
     "th_tip": 0.5,
 }
 
-# Runner config
-RunnerConfig.kp_pos = 100.0
-RunnerConfig.kp_rot = 10.0
-RunnerConfig.initial_pose = (
+# Compliance policy fields
+ComplianceConfig.kp_pos = 100.0
+ComplianceConfig.kp_rot = 10.0
+ComplianceConfig.initial_pose = (
     (0.052, -0.1, 0.247, -3.14, 0.0, 0.0),
     (0.052, -0.055, 0.247, -3.14, 0.0, 0.0),
     (0.052, -0.01, 0.247, -3.14, 0.0, 0.0),
     (-0.228, -0.094, 0.149, -0.07, 2.42, 0.02),
 )
+ComplianceConfig.use_compliance = True
+ComplianceConfig.use_balance = False
+ComplianceConfig.balance_yaw = False
 
 # Motor config paths
 MotorConfigPaths.default_config_path = "descriptions/default.yml"
 MotorConfigPaths.robot_config_path = "descriptions/leap_hand/robot.yml"
-MotorConfigPaths.motors_config_path = "descriptions/leap_hand/motors.yml"
+MotorConfigPaths.motor_config_path = "descriptions/leap_hand/motors.yml"

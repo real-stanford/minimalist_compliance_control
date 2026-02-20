@@ -6,7 +6,7 @@ import glob
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -24,11 +24,9 @@ class CompliancePlotter:
         self,
         site_names: Sequence[str],
         enabled: bool = True,
-        output_dir: Optional[str] = None,
     ) -> None:
         self.site_names = [str(name) for name in site_names]
         self.enabled = bool(enabled)
-        self.output_dir = output_dir
         self.error_message: Optional[str] = None
         self._has_applied_force = False
         self._hist: Dict[str, Dict[str, list[npt.NDArray[np.float64] | float]]] = {
@@ -75,9 +73,9 @@ class CompliancePlotter:
         command_pose: npt.NDArray[np.float32],
         x_ref: Optional[npt.NDArray[np.float32]],
         x_ik: Optional[npt.NDArray[np.float32]],
+        x_obs: npt.NDArray[np.float32],
         wrenches: Dict[str, npt.NDArray[np.float32]],
         applied_site_forces: Optional[npt.NDArray[np.float32]],
-        wrench_sim: Any,
     ) -> None:
         if not self.enabled:
             return
@@ -97,16 +95,10 @@ class CompliancePlotter:
             if applied_force_arr.shape == (num_sites, 3):
                 applied_force = applied_force_arr
                 self._has_applied_force = True
-        obs = np.zeros((num_sites, 6), dtype=np.float64)
+        obs = np.asarray(x_obs, dtype=np.float64)
+        if obs.shape != (num_sites, 6):
+            return
         for idx, site in enumerate(self.site_names):
-            site_id = wrench_sim.site_ids[site]
-            obs[idx, :3] = np.asarray(
-                wrench_sim.data.site_xpos[site_id], dtype=np.float64
-            )
-            rotmat = np.asarray(
-                wrench_sim.data.site_xmat[site_id], dtype=np.float64
-            ).reshape(3, 3)
-            obs[idx, 3:6] = self._mat_to_rotvec(rotmat)
             wrench = np.asarray(
                 wrenches.get(site, np.zeros(6)), dtype=np.float64
             ).reshape(6)
@@ -122,10 +114,10 @@ class CompliancePlotter:
             else:
                 hist["applied_force"].append(np.zeros(3, dtype=np.float64))
 
-    def _dump_pngs(self) -> None:
-        if self.output_dir is None:
+    def _dump_pngs(self, exp_folder_path: str = "") -> None:
+        if not exp_folder_path:
             return
-        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(exp_folder_path, exist_ok=True)
         try:
             import matplotlib
 
@@ -209,17 +201,17 @@ class CompliancePlotter:
 
         pose_fig.tight_layout()
         wrench_fig.tight_layout()
-        pose_fig.savefig(os.path.join(self.output_dir, "compliance_ref.png"), dpi=150)
+        pose_fig.savefig(os.path.join(exp_folder_path, "compliance_ref.png"), dpi=150)
         wrench_fig.savefig(
-            os.path.join(self.output_dir, "estimated_wrench.png"), dpi=150
+            os.path.join(exp_folder_path, "estimated_wrench.png"), dpi=150
         )
         plt.close(pose_fig)
         plt.close(wrench_fig)
 
-    def close(self) -> None:
+    def close(self, exp_folder_path: str = "") -> None:
         if not self.enabled:
             return
-        self._dump_pngs()
+        self._dump_pngs(exp_folder_path=exp_folder_path)
 
 
 class ComplianceVLMPlotter:

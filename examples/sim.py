@@ -2,53 +2,84 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Any, Callable, Dict
 
 import mujoco
 import mujoco.viewer
 import numpy as np
 import numpy.typing as npt
 
-from minimalist_compliance_control.utils import (
-    MotorParams,
-    compute_clamped_motor_torque,
-)
+from examples.base_sim import BaseSim, Obs
 
 
-@runtime_checkable
-class BaseSim(Protocol):
-    """Minimal interface required by compliance examples."""
+@dataclass
+class MotorParams:
+    kp: np.ndarray
+    kd: np.ndarray
+    tau_max: np.ndarray
+    q_dot_max: np.ndarray
+    tau_q_dot_max: np.ndarray
+    q_dot_tau_max: np.ndarray
+    tau_brake_max: np.ndarray
+    kd_min: np.ndarray
+    passive_active_ratio: float
 
-    model: mujoco.MjModel
-    data: mujoco.MjData
 
-    def set_motor_target(self, motor_target: npt.NDArray[np.float32]) -> None:
-        """Set motor target for the next backend step."""
-
-    def step(self) -> None:
-        """Advance one backend step."""
-
-    def get_observation(self) -> dict[str, Any]:
-        """Return latest observation used by controllers."""
-
-    def sync(self) -> bool:
-        """Synchronize visualization/output and report whether to keep running."""
-
-    def close(self) -> None:
-        """Release backend resources."""
+def compute_clamped_motor_torque(
+    target_motor_pos: np.ndarray,
+    q: np.ndarray,
+    q_dot: np.ndarray,
+    q_dot_dot: np.ndarray,
+    motor_params: MotorParams,
+) -> np.ndarray:
+    error = target_motor_pos - q
+    real_kp = np.where(
+        q_dot_dot * error < 0,
+        motor_params.kp * motor_params.passive_active_ratio,
+        motor_params.kp,
+    )
+    tau_m = real_kp * error - (motor_params.kd_min + motor_params.kd) * q_dot
+    abs_q_dot = np.abs(q_dot)
+    slope = (motor_params.tau_q_dot_max - motor_params.tau_max) / (
+        motor_params.q_dot_max - motor_params.q_dot_tau_max
+    )
+    taper_limit = motor_params.tau_max + slope * (
+        abs_q_dot - motor_params.q_dot_tau_max
+    )
+    tau_acc_limit = np.where(
+        abs_q_dot <= motor_params.q_dot_tau_max, motor_params.tau_max, taper_limit
+    )
+    tau_m_clamped = np.where(
+        np.logical_and(
+            abs_q_dot > motor_params.q_dot_max, q_dot * target_motor_pos > 0
+        ),
+        np.where(
+            q_dot > 0,
+            np.ones_like(tau_m) * -motor_params.tau_brake_max,
+            np.ones_like(tau_m) * motor_params.tau_brake_max,
+        ),
+        np.where(
+            q_dot > 0,
+            np.clip(tau_m, -motor_params.tau_brake_max, tau_acc_limit),
+            np.clip(tau_m, -tau_acc_limit, motor_params.tau_brake_max),
+        ),
+    )
+    return tau_m_clamped
 
 
 def build_clamped_torque_substep_control(
     qpos_adr: npt.NDArray[np.int32],
     qvel_adr: npt.NDArray[np.int32],
     motor_params: MotorParams,
-    target_motor_pos_getter: Callable[[], npt.NDArray[np.float32]],
-) -> Callable[[mujoco.MjData], None]:
+) -> Callable[[mujoco.MjData, npt.NDArray[np.float32]], None]:
     qpos_adr_arr = np.asarray(qpos_adr, dtype=np.int32)
     qvel_adr_arr = np.asarray(qvel_adr, dtype=np.int32)
 
-    def _substep_control(data_step: mujoco.MjData) -> None:
-        target_motor_pos = np.asarray(target_motor_pos_getter(), dtype=np.float32)
+    def _substep_control(
+        data_step: mujoco.MjData, target_motor_pos: npt.NDArray[np.float32]
+    ) -> None:
+        target_motor_pos = np.asarray(target_motor_pos, dtype=np.float32)
         q = data_step.qpos[qpos_adr_arr]
         q_dot = data_step.qvel[qvel_adr_arr]
         q_dot_dot = data_step.qacc[qvel_adr_arr]
@@ -63,9 +94,69 @@ def build_clamped_torque_substep_control(
     return _substep_control
 
 
+def build_motor_params_from_config(
+    model: mujoco.MjModel, config: dict[str, Any]
+) -> MotorParams:
+    actuators_cfg = config.get("actuators", {})
+    motors_cfg = config.get("motors", {})
+    if not isinstance(actuators_cfg, dict):
+        raise ValueError("Merged config missing 'actuators' dictionary.")
+    if not isinstance(motors_cfg, dict):
+        raise ValueError("Merged config missing 'motors' dictionary.")
+
+    kp_ratio = float(actuators_cfg["kp_ratio"])
+    kd_ratio = float(actuators_cfg["kd_ratio"])
+    passive_active_ratio = float(actuators_cfg["passive_active_ratio"])
+
+    names = [
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+        for i in range(model.nu)
+    ]
+    kp = []
+    kd = []
+    tau_max = []
+    q_dot_max = []
+    tau_q_dot_max = []
+    q_dot_tau_max = []
+    tau_brake_max = []
+    kd_min = []
+    for name in names:
+        if name is None:
+            raise ValueError("Actuator name is missing in MuJoCo model.")
+        motor_key = name
+        if motor_key not in motors_cfg and motor_key.endswith("_act"):
+            base_key = motor_key[: -len("_act")]
+            if base_key in motors_cfg:
+                motor_key = base_key
+        if motor_key not in motors_cfg:
+            raise ValueError(f"Missing motor config for actuator '{name}'")
+        m_cfg = motors_cfg[motor_key]
+        motor_type = m_cfg["motor"]
+        act_cfg = actuators_cfg[motor_type]
+        kp.append(float(m_cfg.get("kp", 0.0)) / kp_ratio)
+        kd.append(float(m_cfg.get("kd", 0.0)) / kd_ratio)
+        tau_max.append(float(act_cfg["tau_max"]))
+        q_dot_max.append(float(act_cfg["q_dot_max"]))
+        tau_q_dot_max.append(float(act_cfg["tau_q_dot_max"]))
+        q_dot_tau_max.append(float(act_cfg["q_dot_tau_max"]))
+        tau_brake_max.append(float(act_cfg["tau_brake_max"]))
+        kd_min.append(float(act_cfg["kd_min"]))
+
+    return MotorParams(
+        kp=np.asarray(kp, dtype=np.float32),
+        kd=np.asarray(kd, dtype=np.float32),
+        tau_max=np.asarray(tau_max, dtype=np.float32),
+        q_dot_max=np.asarray(q_dot_max, dtype=np.float32),
+        tau_q_dot_max=np.asarray(tau_q_dot_max, dtype=np.float32),
+        q_dot_tau_max=np.asarray(q_dot_tau_max, dtype=np.float32),
+        tau_brake_max=np.asarray(tau_brake_max, dtype=np.float32),
+        kd_min=np.asarray(kd_min, dtype=np.float32),
+        passive_active_ratio=passive_active_ratio,
+    )
+
+
 def build_site_force_applier(
-    model: mujoco.MjModel,
-    site_ids: npt.NDArray[np.int32],
+    model: mujoco.MjModel, site_ids: npt.NDArray[np.int32]
 ) -> Callable[[mujoco.MjData, npt.NDArray[np.float32]], None]:
     site_ids_arr = np.asarray(site_ids, dtype=np.int32).reshape(-1)
     torque_zero = np.zeros(3, dtype=np.float64)
@@ -102,7 +193,7 @@ def build_site_force_applier(
     return _apply_site_forces
 
 
-class MuJoCoSim:
+class MuJoCoSim(BaseSim):
     """Thin wrapper around MuJoCo model/data state."""
 
     def __init__(
@@ -112,13 +203,13 @@ class MuJoCoSim:
         control_dt: float,
         sim_dt: float | None = None,
         vis: bool = False,
-        substep_control: Callable[[mujoco.MjData], None] | None = None,
+        custom_pd: bool = False,
+        merged_config: dict[str, Any] | None = None,
     ) -> None:
         self.model = model
         self.data = data
         self.name = "mujoco"
         self.vis = bool(vis)
-        self.substep_control = substep_control
         self.control_dt = float(control_dt)
         if self.control_dt <= 0.0:
             raise ValueError("control_dt must be > 0.")
@@ -133,17 +224,35 @@ class MuJoCoSim:
             raise ValueError("All actuators must map to valid joints in MuJoCoSim.")
         self._qpos_adr = np.asarray(self.model.jnt_qposadr[trnid], dtype=np.int32)
         self._qvel_adr = np.asarray(self.model.jnt_dofadr[trnid], dtype=np.int32)
+
+        self.custom_pd = bool(custom_pd)
+        if self.custom_pd:
+            if merged_config is None:
+                raise ValueError("merged_config is required when custom_pd=True.")
+            motor_params = build_motor_params_from_config(
+                model=self.model,
+                config=merged_config,
+            )
+            self.substep_control = build_clamped_torque_substep_control(
+                qpos_adr=self._qpos_adr,
+                qvel_adr=self._qvel_adr,
+                motor_params=motor_params,
+            )
+        else:
+            self.substep_control = None
+
         self.viewer = None
         self._debug_site_forces: Dict[str, npt.NDArray[np.float32]] = {}
         self._debug_force_vis_scale = 0.02
         self._debug_site_targets: Dict[str, npt.NDArray[np.float32]] = {}
         self._debug_target_axis_length = 0.04
         self._site_name_to_id: Dict[str, int] = {}
+        self._motor_target = np.asarray(self.data.ctrl, dtype=np.float32).copy()
 
     def step(self) -> None:
         for _ in range(self.n_substeps):
             if self.substep_control is not None:
-                self.substep_control(self.data)
+                self.substep_control(self.data, self._motor_target)
             mujoco.mj_step(self.model, self.data)
 
     def set_motor_target(self, motor_target: npt.NDArray[np.float32]) -> None:
@@ -152,24 +261,27 @@ class MuJoCoSim:
             raise ValueError(
                 f"motor_target shape {target.shape[0]} must equal model.nu {self.model.nu}"
             )
-        self.data.ctrl[:] = target
+        self._motor_target = target.copy()
+        if not self.custom_pd:
+            self.data.ctrl[:] = target
 
-    def get_observation(self) -> dict[str, Any]:
-        return {
-            "time": float(self.data.time),
-            "motor_pos": np.asarray(
+    def get_observation(self) -> Obs:
+        return Obs(
+            ang_vel=np.zeros(3, dtype=np.float32),
+            time=float(self.data.time),
+            motor_pos=np.asarray(
                 self.data.qpos[self._qpos_adr], dtype=np.float32
             ).copy(),
-            "motor_vel": np.asarray(
+            motor_vel=np.asarray(
                 self.data.qvel[self._qvel_adr], dtype=np.float32
             ).copy(),
-            "motor_acc": np.asarray(
+            motor_acc=np.asarray(
                 self.data.qacc[self._qvel_adr], dtype=np.float32
             ).copy(),
-            "motor_tor": np.asarray(self.data.actuator_force, dtype=np.float32).copy(),
-            "qpos": np.asarray(self.data.qpos, dtype=np.float32).copy(),
-            "qvel": np.asarray(self.data.qvel, dtype=np.float32).copy(),
-        }
+            motor_tor=np.asarray(self.data.actuator_force, dtype=np.float32).copy(),
+            qpos=np.asarray(self.data.qpos, dtype=np.float32).copy(),
+            qvel=np.asarray(self.data.qvel, dtype=np.float32).copy(),
+        )
 
     def set_debug_site_targets(
         self,

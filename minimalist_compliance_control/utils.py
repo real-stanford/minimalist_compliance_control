@@ -7,11 +7,10 @@ import time
 import tty
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence
+from typing import Iterable, Optional, Sequence
 
-import mujoco
 import numpy as np
-import yaml
+import numpy.typing as npt
 
 AXIS_BINDINGS = {
     "w": (0, +1),
@@ -24,17 +23,119 @@ AXIS_BINDINGS = {
 VALID_KEYBOARD_COMMANDS = {"c", "l", "r", "b"}
 
 
-@dataclass
-class MotorParams:
-    kp: np.ndarray
-    kd: np.ndarray
-    tau_max: np.ndarray
-    q_dot_max: np.ndarray
-    tau_q_dot_max: np.ndarray
-    q_dot_tau_max: np.ndarray
-    tau_brake_max: np.ndarray
-    kd_min: np.ndarray
-    passive_active_ratio: float
+def _symmetrize(matrix: npt.ArrayLike) -> npt.NDArray[np.float32]:
+    arr = np.asarray(matrix, dtype=np.float32)
+    return (0.5 * (arr + np.swapaxes(arr, -1, -2))).astype(np.float32)
+
+
+def _matrix_sqrt(matrix: npt.ArrayLike) -> npt.NDArray[np.float32]:
+    sym = _symmetrize(matrix)
+    eigvals, eigvecs = np.linalg.eigh(sym)
+    eigvals_clipped = np.clip(eigvals, 0.0, None)
+    sqrt_vals = np.sqrt(eigvals_clipped)[..., None, :]
+    scaled_vecs = eigvecs * sqrt_vals
+    sqrt_matrix = np.matmul(scaled_vecs, np.swapaxes(eigvecs, -1, -2))
+    return _symmetrize(sqrt_matrix)
+
+
+def ensure_matrix(
+    value: npt.ArrayLike | float | Iterable[float],
+) -> npt.NDArray[np.float32]:
+    arr = np.asarray(value, dtype=np.float32)
+    if arr.ndim == 0:
+        return np.eye(3, dtype=np.float32) * float(arr)
+    if arr.ndim == 1:
+        if arr.shape[0] != 3:
+            raise ValueError("Gain vectors must have length 3.")
+        return np.diag(arr.astype(np.float32))
+    if arr.ndim >= 2:
+        if arr.shape[-2:] != (3, 3):
+            raise ValueError("Gain matrices must have trailing shape (3, 3).")
+        return arr.astype(np.float32)
+    raise ValueError("Unsupported gain array shape.")
+
+
+def get_damping_matrix(
+    stiffness: npt.ArrayLike,
+    inertia_like: npt.ArrayLike | float | Iterable[float],
+) -> npt.NDArray[np.float32]:
+    stiffness_matrix = ensure_matrix(stiffness)
+    inertia_matrix = ensure_matrix(inertia_like)
+    mass_sqrt = _matrix_sqrt(inertia_matrix)
+    stiffness_sqrt = _matrix_sqrt(stiffness_matrix)
+    damping = 2.0 * np.matmul(mass_sqrt, stiffness_sqrt)
+    return _symmetrize(damping).astype(np.float32)
+
+
+def _interpolate_linear(
+    p_start: npt.NDArray[np.float32],
+    p_end: npt.NDArray[np.float32],
+    duration: float,
+    t: float,
+) -> npt.NDArray[np.float32]:
+    if t <= 0.0:
+        return p_start
+    if t >= duration:
+        return p_end
+    return p_start + (p_end - p_start) * (t / duration)
+
+
+def interpolate_action(
+    t: float,
+    time_arr: npt.NDArray[np.float32],
+    action_arr: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    if t <= float(time_arr[0]):
+        return np.asarray(action_arr[0], dtype=np.float32)
+    if t >= float(time_arr[-1]):
+        return np.asarray(action_arr[-1], dtype=np.float32)
+
+    idx = int(np.searchsorted(time_arr, t, side="right") - 1)
+    idx = max(0, min(idx, len(time_arr) - 2))
+    p_start = np.asarray(action_arr[idx], dtype=np.float32)
+    p_end = np.asarray(action_arr[idx + 1], dtype=np.float32)
+    duration = float(time_arr[idx + 1] - time_arr[idx])
+    return _interpolate_linear(
+        p_start, p_end, max(duration, 1e-6), t - float(time_arr[idx])
+    )
+
+
+def get_action_traj(
+    start_time: float,
+    start_action: npt.ArrayLike,
+    end_action: npt.ArrayLike,
+    duration: float,
+    dt: float,
+    end_time: float = 0.0,
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    traj_duration = float(max(duration, 0.0))
+    traj_dt = float(max(dt, 1e-6))
+    n_steps = max(int(traj_duration / traj_dt), 2)
+    traj_time = np.linspace(
+        float(start_time),
+        float(start_time) + traj_duration,
+        n_steps,
+        endpoint=True,
+        dtype=np.float32,
+    )
+
+    action_start = np.asarray(start_action, dtype=np.float32).reshape(-1)
+    action_end = np.asarray(end_action, dtype=np.float32).reshape(-1)
+    traj_action = np.zeros(
+        (traj_time.shape[0], action_start.shape[0]), dtype=np.float32
+    )
+
+    hold_time = float(np.clip(end_time, 0.0, traj_duration))
+    blend_duration = max(traj_duration - hold_time, 0.0)
+    for i, t_now in enumerate(traj_time):
+        t_rel = float(t_now - start_time)
+        if t_rel < blend_duration:
+            traj_action[i] = _interpolate_linear(
+                action_start, action_end, max(blend_duration, 1e-6), t_rel
+            )
+        else:
+            traj_action[i] = action_end
+    return traj_time, traj_action
 
 
 class KeyboardTeleop:
@@ -264,121 +365,3 @@ class KeyboardControlReceiver:
         if cmd is None:
             return None
         return KeyboardCommand(command=cmd, recv_time=time.time())
-
-
-def deep_update(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
-    for key, value in update.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            deep_update(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
-def load_motor_params(
-    model: mujoco.MjModel,
-    default_config_path: str,
-    robot_config_path: str,
-    motors_config_path: Optional[str] = None,
-) -> MotorParams:
-    with open(default_config_path, "r") as f:
-        config = yaml.safe_load(f)
-    with open(robot_config_path, "r") as f:
-        robot_cfg = yaml.safe_load(f)
-    if robot_cfg is not None:
-        deep_update(config, robot_cfg)
-    if motors_config_path:
-        with open(motors_config_path, "r") as f:
-            motor_cfg = yaml.safe_load(f)
-        if motor_cfg is not None:
-            deep_update(config, motor_cfg)
-
-    kp_ratio = float(config["actuators"]["kp_ratio"])
-    kd_ratio = float(config["actuators"]["kd_ratio"])
-    passive_active_ratio = float(config["actuators"]["passive_active_ratio"])
-
-    names = [
-        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
-        for i in range(model.nu)
-    ]
-    kp = []
-    kd = []
-    tau_max = []
-    q_dot_max = []
-    tau_q_dot_max = []
-    q_dot_tau_max = []
-    tau_brake_max = []
-    kd_min = []
-    for name in names:
-        motor_key = name
-        if motor_key not in config["motors"] and motor_key.endswith("_act"):
-            base_key = motor_key[: -len("_act")]
-            if base_key in config["motors"]:
-                motor_key = base_key
-        if motor_key not in config["motors"]:
-            raise ValueError(f"Missing motor config for actuator '{name}'")
-        m_cfg = config["motors"][motor_key]
-        motor_type = m_cfg["motor"]
-        act_cfg = config["actuators"][motor_type]
-        kp.append(float(m_cfg.get("kp", 0.0)) / kp_ratio)
-        kd.append(float(m_cfg.get("kd", 0.0)) / kd_ratio)
-        tau_max.append(float(act_cfg["tau_max"]))
-        q_dot_max.append(float(act_cfg["q_dot_max"]))
-        tau_q_dot_max.append(float(act_cfg["tau_q_dot_max"]))
-        q_dot_tau_max.append(float(act_cfg["q_dot_tau_max"]))
-        tau_brake_max.append(float(act_cfg["tau_brake_max"]))
-        kd_min.append(float(act_cfg["kd_min"]))
-
-    return MotorParams(
-        kp=np.asarray(kp, dtype=np.float32),
-        kd=np.asarray(kd, dtype=np.float32),
-        tau_max=np.asarray(tau_max, dtype=np.float32),
-        q_dot_max=np.asarray(q_dot_max, dtype=np.float32),
-        tau_q_dot_max=np.asarray(tau_q_dot_max, dtype=np.float32),
-        q_dot_tau_max=np.asarray(q_dot_tau_max, dtype=np.float32),
-        tau_brake_max=np.asarray(tau_brake_max, dtype=np.float32),
-        kd_min=np.asarray(kd_min, dtype=np.float32),
-        passive_active_ratio=passive_active_ratio,
-    )
-
-
-def compute_clamped_motor_torque(
-    target_motor_pos: np.ndarray,
-    q: np.ndarray,
-    q_dot: np.ndarray,
-    q_dot_dot: np.ndarray,
-    motor_params: MotorParams,
-) -> np.ndarray:
-    error = target_motor_pos - q
-    real_kp = np.where(
-        q_dot_dot * error < 0,
-        motor_params.kp * motor_params.passive_active_ratio,
-        motor_params.kp,
-    )
-    tau_m = real_kp * error - (motor_params.kd_min + motor_params.kd) * q_dot
-    abs_q_dot = np.abs(q_dot)
-    slope = (motor_params.tau_q_dot_max - motor_params.tau_max) / (
-        motor_params.q_dot_max - motor_params.q_dot_tau_max
-    )
-    taper_limit = motor_params.tau_max + slope * (
-        abs_q_dot - motor_params.q_dot_tau_max
-    )
-    tau_acc_limit = np.where(
-        abs_q_dot <= motor_params.q_dot_tau_max, motor_params.tau_max, taper_limit
-    )
-    tau_m_clamped = np.where(
-        np.logical_and(
-            abs_q_dot > motor_params.q_dot_max, q_dot * target_motor_pos > 0
-        ),
-        np.where(
-            q_dot > 0,
-            np.ones_like(tau_m) * -motor_params.tau_brake_max,
-            np.ones_like(tau_m) * motor_params.tau_brake_max,
-        ),
-        np.where(
-            q_dot > 0,
-            np.clip(tau_m, -motor_params.tau_brake_max, tau_acc_limit),
-            np.clip(tau_m, -tau_acc_limit, motor_params.tau_brake_max),
-        ),
-    )
-    return tau_m_clamped

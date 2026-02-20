@@ -213,11 +213,7 @@ class ThreadedIMU:
         # Threading controls
         self.running = False
         self.lock = threading.Lock()
-        self.latest_state: Optional[
-            Tuple[
-                np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
-            ]
-        ] = None
+        self.latest_state: Optional[Tuple[np.ndarray, np.ndarray]] = None
         self.thread = None
 
         # Butterworth filter setup
@@ -275,16 +271,8 @@ class ThreadedIMU:
                     self.sample_counter = 0
 
                     with self.lock:
-                        # Keep legacy 6-item tuple shape expected by callers:
-                        # (quat_raw1, quat_raw2, quat_fused, ang_vel_raw1, ang_vel_raw2, ang_vel_fused)
-                        self.latest_state = (
-                            quat_raw.copy(),
-                            quat_raw.copy(),
-                            quat_raw.copy(),
-                            ang_vel_raw.copy(),
-                            ang_vel_raw.copy(),
-                            filtered_ang_vel.copy(),
-                        )
+                        # 2-item tuple: (quat, ang_vel)
+                        self.latest_state = (quat_raw.copy(), filtered_ang_vel.copy())
 
                 remaining_time = self.input_dt - (t_end - t_start)
                 # print(f"[ThreadedIMU] Remaining time: {remaining_time:.3f} s")
@@ -295,15 +283,11 @@ class ThreadedIMU:
 
     def get_latest_state(
         self,
-    ) -> Optional[
-        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-    ]:
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """Get the latest filtered IMU state.
 
         Returns:
-            Legacy-compatible 6-item tuple
-            (quat_raw1, quat_raw2, quat_fused, ang_vel_raw1, ang_vel_raw2, ang_vel_fused),
-            where all items are derived from one IMU.
+            2-item tuple (quat, ang_vel).
         """
         with self.lock:
             return self.latest_state

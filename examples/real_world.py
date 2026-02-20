@@ -7,28 +7,19 @@ observation timing, and IMU warmup.
 
 from __future__ import annotations
 
-import importlib.util
+import copy
 import os
 import platform
 import re
 import time
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, Sequence
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from minimalist_compliance_control.utils import deep_update
-
-
-def _load_yaml(path: str) -> dict[str, Any]:
-    import yaml
-
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return data if isinstance(data, dict) else {}
+from examples.base_sim import BaseSim, Obs
 
 
 def _import_dynamixel_cpp() -> ModuleType:
@@ -36,83 +27,45 @@ def _import_dynamixel_cpp() -> ModuleType:
         import dynamixel_cpp  # type: ignore
 
         return dynamixel_cpp  # type: ignore[return-value]
-    except Exception as exc:
-        direct_path = os.environ.get("MCC_DYNAMIXEL_CPP_PATH", "").strip()
-        legacy_root = os.environ.get("MCC_TODDLERBOT_INTERNAL_PATH", "").strip()
-        candidates: list[Path] = []
-        if direct_path:
-            candidates.append(Path(direct_path))
-        if legacy_root:
-            candidates.extend(
-                [
-                    Path(legacy_root) / "build" / "dynamixel_cpp.so",
-                    Path(legacy_root) / "dynamixel_cpp.so",
-                ]
-            )
-        for candidate in candidates:
-            if not candidate.exists():
-                continue
-            spec = importlib.util.spec_from_file_location("dynamixel_cpp", candidate)
-            if spec is None or spec.loader is None:
-                continue
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
-        raise ImportError(
-            "Failed to import dynamixel_cpp. Build/install the extension or set "
-            "MCC_DYNAMIXEL_CPP_PATH to dynamixel_cpp*.so."
-        ) from exc
+    except ImportError as exc:
+        print(f"Failed to import dynamixel_cpp: {exc}")
+        raise
 
 
-class RealWorld:
+class RealWorld(BaseSim):
     """Real-world backend with old toddlerbot-style motor/IMU processing."""
 
     def __init__(
         self,
-        *,
         robot: str,
         control_dt: float,
-        default_config_path: str,
-        robot_config_path: str,
-        motors_config_path: str | None = None,
-        motor_ordering: Sequence[str] | None = None,
+        xml_path: str,
+        merged_config: dict[str, Any] | None = None,
     ) -> None:
         self.name = "real_world"
         self.robot_name = str(robot)
         self.is_toddlerbot = "toddlerbot" in self.robot_name.lower()
         self.control_dt = float(control_dt)
 
-        config = _load_yaml(default_config_path)
-        deep_update(config, _load_yaml(robot_config_path))
-        if motors_config_path:
-            deep_update(config, _load_yaml(motors_config_path))
-        self.config = config
+        if merged_config is None:
+            raise ValueError("RealWorld requires merged_config to be provided.")
+        self.config = copy.deepcopy(merged_config)
 
         motors_cfg = self.config.get("motors", {})
         if not isinstance(motors_cfg, dict) or not motors_cfg:
             raise ValueError("Merged motor config is empty.")
-
-        if motor_ordering is None:
-            self.motor_ordering = list(motors_cfg.keys())
-        else:
-            self.motor_ordering = [str(name) for name in motor_ordering]
-            missing = [name for name in self.motor_ordering if name not in motors_cfg]
-            if missing:
-                raise ValueError(
-                    "Motor config missing entries for actuator ordering: "
-                    + ", ".join(missing)
-                )
+        self.motor_ordering = list(motors_cfg.keys())
 
         actuators_cfg = self.config.get("actuators", {})
         if not isinstance(actuators_cfg, dict):
             actuators_cfg = {}
+        self.gain_backdrive = float(actuators_cfg.get("gain_backdrive", 1.0))
         self.use_balance = bool(self.config.get("robot", {}).get("use_balance", True))
 
         self.motor_groups: np.ndarray = np.asarray(
             [str(motors_cfg[name].get("group", "arm")) for name in self.motor_ordering],
             dtype=object,
         )
-
         self.motor_kv = np.zeros(len(self.motor_ordering), dtype=np.float32)
         self.motor_r_winding = np.ones(len(self.motor_ordering), dtype=np.float32)
         self.motor_kt = np.ones(len(self.motor_ordering), dtype=np.float32)
@@ -225,7 +178,7 @@ class RealWorld:
             print(f"Failed to read current limits: {exc}")
 
         self.drive_state = np.ones(len(self.motor_ordering), dtype=np.float32)
-        self._build_motor_joint_maps(robot_config_path)
+        self._build_motor_joint_maps(xml_path)
 
         if self.imu is not None:
             imu_data = self.imu.get_latest_state()
@@ -302,14 +255,12 @@ class RealWorld:
         motor_vin_arr = np.asarray(motor_vin, dtype=np.float32)
 
         if "arx" in self.robot_name.lower():
-            gain_drive = 1.0
-            gain_back = 1.0
+            gain_back = float(self.gain_backdrive)
             i_est = motor_cur_arr.copy()
-            tau_est = motor_cur_arr.copy()
+            tau_est = motor_cur_arr.copy()  # already in torque units
         else:
-            gain_drive = 1.0
             gain_back = np.ones_like(motor_cur_arr, dtype=np.float32)
-            gain_back[self.motor_groups == "arm"] = 5.0
+            gain_back[self.motor_groups == "arm"] = float(self.gain_backdrive)
 
             motor_duty = np.clip(motor_pwm_arr / 100.0, -1.0, 1.0)
             applied_voltage = motor_duty * motor_vin_arr
@@ -337,7 +288,7 @@ class RealWorld:
         ).astype(np.float32)
         self.drive_state = drive_state
 
-        gain = np.where(drive_state > 0, gain_drive, gain_back).astype(np.float32)
+        gain = np.where(drive_state > 0, 1.0, gain_back).astype(np.float32)
         return (
             i_est.astype(np.float32),
             drive_state,
@@ -355,28 +306,16 @@ class RealWorld:
             return "rack_and_pinion"
         return "none"
 
-    def _resolve_robot_fixed_xml_path(self, robot_config_path: str) -> Path | None:
-        robot_dir = Path(robot_config_path).resolve().parent
-        candidates = [robot_dir / f"{robot_dir.name}_fixed.xml"]
-        if not candidates[0].is_file():
-            candidates.extend(sorted(robot_dir.glob("*fixed*.xml")))
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-        return None
-
-    def _build_motor_joint_maps(self, robot_config_path: str) -> None:
+    def _build_motor_joint_maps(self, xml_path: str) -> None:
         nu = len(self.motor_ordering)
         motor_index = {name: idx for idx, name in enumerate(self.motor_ordering)}
         motor_gear_ratios = {name: 1.0 for name in self.motor_ordering}
 
-        xml_path = self._resolve_robot_fixed_xml_path(robot_config_path)
         xml_root = None
-        if xml_path is not None:
-            try:
-                xml_root = ET.parse(xml_path).getroot()
-            except Exception:
-                xml_root = None
+        try:
+            xml_root = ET.parse(xml_path).getroot()
+        except Exception:
+            xml_root = None
         if xml_root is not None:
             for motor_name in self.motor_ordering:
                 elem = xml_root.find(f".//equality/joint[@joint2='{motor_name}']")
@@ -549,7 +488,7 @@ class RealWorld:
         qpos[self._qpos_start_idx : end] = dof_arr
         return qpos
 
-    def _get_qvel_from_motor_vel(self, motor_vel: np.ndarray) -> np.ndarray:
+    def get_qvel(self, motor_vel: np.ndarray) -> np.ndarray:
         motor_vel_arr = np.asarray(motor_vel, dtype=np.float32).reshape(-1)
         if motor_vel_arr.shape[0] != len(self.motor_ordering):
             raise ValueError(
@@ -561,7 +500,7 @@ class RealWorld:
         qvel[self._qvel_start_idx : end] = dof_vel
         return qvel
 
-    def get_observation(self, retries: int = 0) -> dict[str, Any]:
+    def get_observation(self, retries: int = 0) -> Obs:
         motor_state = self.controller.get_motor_states(self.controllers, int(retries))
 
         all_motor_pos: list[float] = []
@@ -598,7 +537,7 @@ class RealWorld:
         if self.imu is not None:
             latest = self.imu.get_latest_state()
             if latest is not None:
-                _, _, quat, _, _, ang_vel = latest
+                quat, ang_vel = latest
 
         root_quat_for_qpos: np.ndarray | None = None
         if (
@@ -612,26 +551,25 @@ class RealWorld:
             rot_curr = R.from_euler("xyz", [0.0, float(euler[1]), float(euler[2])])
             root_quat_for_qpos = rot_curr.as_quat(scalar_first=True).astype(np.float32)
 
-        obs: dict[str, Any] = {
-            "time": time.monotonic(),
-            "motor_pos": motor_pos,
-            "motor_vel": motor_vel,
-            "motor_cur": motor_cur,
-            "motor_drive": motor_drive,
-            "motor_tor": motor_tor,
-            "motor_pwm": motor_pwm,
-            "motor_vin": motor_vin,
-            "motor_temp": motor_temp,
-            "qpos": self.get_qpos(motor_pos, root_quat=root_quat_for_qpos),
-            "qvel": self._get_qvel_from_motor_vel(motor_vel),
-        }
-        if ang_vel is not None:
-            obs["ang_vel"] = np.asarray(ang_vel, dtype=np.float32)
+        rot = None
         if quat is not None:
-            obs["rot"] = R.from_quat(
-                np.asarray(quat, dtype=np.float32), scalar_first=True
-            )
-        return obs
+            rot = R.from_quat(np.asarray(quat, dtype=np.float32), scalar_first=True)
+
+        return Obs(
+            ang_vel=ang_vel,
+            time=float(time.monotonic()),
+            motor_pos=motor_pos,
+            motor_vel=motor_vel,
+            motor_tor=motor_tor,
+            qpos=self.get_qpos(motor_pos, root_quat=root_quat_for_qpos),
+            qvel=self.get_qvel(motor_vel),
+            rot=rot,
+            motor_cur=motor_cur,
+            motor_drive=motor_drive,
+            motor_pwm=motor_pwm,
+            motor_vin=motor_vin,
+            motor_temp=motor_temp,
+        )
 
     def set_motor_target(self, motor_angles: Dict[str, float] | np.ndarray) -> None:
         if isinstance(motor_angles, dict):
@@ -686,12 +624,6 @@ class RealWorld:
             self.controller.set_motor_cur(controllers_cur, cur_vecs)
         if controllers_pwm:
             self.controller.set_motor_pwm(controllers_pwm, pwm_vecs)
-
-    def set_motor_kps(self, motor_kps: Dict[str, float]) -> None:
-        del motor_kps
-        raise NotImplementedError(
-            "Setting motor Kp values is not implemented in this backend."
-        )
 
     def close(self) -> None:
         if self.imu is not None:

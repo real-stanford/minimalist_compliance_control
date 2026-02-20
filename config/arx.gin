@@ -25,24 +25,27 @@ WrenchEstimateConfig.axis_aligned = False
 WrenchEstimateConfig.normal_axis = "+z"
 
 # Compliance reference (fixed base)
-ComplianceRefConfig.dt = 0.02
-ComplianceRefConfig.q_start_idx = 0
-ComplianceRefConfig.qd_start_idx = 0
-ComplianceRefConfig.ik_position_only = False
-ComplianceRefConfig.fixed_model_xml_path = "descriptions/arx_arm/arx_arm_fixed.xml"
-ComplianceRefConfig.mass = 1.0
-ComplianceRefConfig.inertia_diag = (1.0, 1.0, 1.0)
-ComplianceRefConfig.mink_num_iter = 1
-ComplianceRefConfig.mink_damping = 0.1
+RefConfig.dt = 0.02
+RefConfig.q_start_idx = 0
+RefConfig.qd_start_idx = 0
+RefConfig.ik_position_only = False
+RefConfig.fixed_model_xml_path = "descriptions/arx_arm/arx_arm_fixed.xml"
+RefConfig.mass = 1.0
+RefConfig.inertia_diag = (1.0, 1.0, 1.0)
+RefConfig.mink_num_iter = 1
+RefConfig.mink_damping = 0.1
 
-# Runner config
-RunnerConfig.kp_pos = 100.0
-RunnerConfig.kp_rot = 10.0
-RunnerConfig.initial_pose = (
+# Compliance policy fields
+ComplianceConfig.kp_pos = 100.0
+ComplianceConfig.kp_rot = 10.0
+ComplianceConfig.initial_pose = (
     (0.3, 0.0, 0.3, 0.0, 0.0, 0.0),
 )
+ComplianceConfig.use_compliance = True
+ComplianceConfig.use_balance = False
+ComplianceConfig.balance_yaw = False
 
 # Motor config paths
 MotorConfigPaths.default_config_path = "descriptions/default.yml"
 MotorConfigPaths.robot_config_path = "descriptions/arx_arm/robot.yml"
-MotorConfigPaths.motors_config_path = None
+MotorConfigPaths.motor_config_path = None

@@ -9,6 +9,7 @@ import gin
 import mujoco
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial.transform import Rotation as R
 
 from minimalist_compliance_control.compliance_ref import (
     COMMAND_LAYOUT,
@@ -30,6 +31,7 @@ class ControllerConfig:
     xml_path: Optional[str] = None
     site_names: Optional[Sequence[str]] = None
     fixed_base: Optional[bool] = None
+    prep_duration: float = 2.0
     base_body_name: Optional[str] = None
     joint_indices_by_site: Optional[Dict[str, npt.NDArray[np.int32]]] = None
     motor_indices_by_site: Optional[Dict[str, npt.NDArray[np.int32]]] = None
@@ -39,7 +41,7 @@ class ControllerConfig:
 
 @gin.configurable
 @dataclass
-class ComplianceRefConfig:
+class RefConfig:
     dt: Optional[float] = None
     ik_position_only: Optional[bool] = None
     mass: Optional[float] = None
@@ -67,7 +69,7 @@ class ComplianceController:
         gin_path: Optional[str] = None,
         config: Optional[ControllerConfig] = None,
         estimate_config: Optional[WrenchEstimateConfig] = None,
-        ref_config: Optional[ComplianceRefConfig] = None,
+        ref_config: Optional[RefConfig] = None,
     ) -> None:
         if gin_path is not None:
             if any(arg is not None for arg in (config, estimate_config, ref_config)):
@@ -78,7 +80,7 @@ class ComplianceController:
             gin.parse_config_file(gin_path)
             config = ControllerConfig()
             estimate_config = WrenchEstimateConfig()
-            ref_config = ComplianceRefConfig()
+            ref_config = RefConfig()
 
         if config is None:
             raise ValueError("Either gin_path or config must be provided.")
@@ -112,7 +114,7 @@ class ComplianceController:
                 fixed_base=bool(config.fixed_base),
             )
         )
-        self.ref_config = ref_config or ComplianceRefConfig()
+        self.ref_config = ref_config or RefConfig()
         self.compliance_ref: Optional[ComplianceReference] = None
         self._last_state: Optional[ComplianceState] = None
         self._build_compliance_ref()
@@ -122,25 +124,64 @@ class ComplianceController:
         """Build controller from a single gin config file path."""
         return cls(gin_path=gin_path)
 
+    @property
+    def site_ids(self) -> Dict[str, int]:
+        return {
+            str(name): int(self.wrench_sim.site_ids[name])
+            for name in self.config.site_names
+        }
+
+    def get_head_pose(self) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        model = self.wrench_sim.model
+        data = self.wrench_sim.data
+        head_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "head")
+        if head_bid < 0:
+            head_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "torso")
+        if head_bid < 0:
+            return np.zeros(3, dtype=np.float32), np.array(
+                [1.0, 0.0, 0.0, 0.0], dtype=np.float32
+            )
+        head_pos = np.asarray(data.xpos[head_bid], dtype=np.float32)
+        head_quat = np.asarray(data.xquat[head_bid], dtype=np.float32)
+        return head_pos, head_quat
+
+    def get_x_obs(self) -> npt.NDArray[np.float32]:
+        num_sites = len(self.config.site_names)
+        x_obs = np.zeros((num_sites, 6), dtype=np.float32)
+        for idx, site_name in enumerate(self.config.site_names):
+            site_id = int(self.wrench_sim.site_ids[site_name])
+            x_obs[idx, :3] = np.asarray(
+                self.wrench_sim.data.site_xpos[site_id], dtype=np.float32
+            )
+            rotmat = np.asarray(
+                self.wrench_sim.data.site_xmat[site_id], dtype=np.float32
+            ).reshape(3, 3)
+            x_obs[idx, 3:6] = R.from_matrix(rotmat).as_rotvec().astype(np.float32)
+        return x_obs
+
+    def sync_qpos(self, qpos: npt.NDArray[np.float32]) -> None:
+        self.wrench_sim.set_qpos(np.asarray(qpos, dtype=np.float32))
+        self.wrench_sim.forward()
+
     def _build_compliance_ref(self) -> None:
         cfg = self.ref_config
         missing_ref_cfg = []
         if cfg.dt is None:
-            missing_ref_cfg.append("ComplianceRefConfig.dt")
+            missing_ref_cfg.append("RefConfig.dt")
         if cfg.ik_position_only is None:
-            missing_ref_cfg.append("ComplianceRefConfig.ik_position_only")
+            missing_ref_cfg.append("RefConfig.ik_position_only")
         if cfg.mass is None:
-            missing_ref_cfg.append("ComplianceRefConfig.mass")
+            missing_ref_cfg.append("RefConfig.mass")
         if cfg.inertia_diag is None:
-            missing_ref_cfg.append("ComplianceRefConfig.inertia_diag")
+            missing_ref_cfg.append("RefConfig.inertia_diag")
         if cfg.mink_num_iter is None:
-            missing_ref_cfg.append("ComplianceRefConfig.mink_num_iter")
+            missing_ref_cfg.append("RefConfig.mink_num_iter")
         if cfg.mink_damping is None:
-            missing_ref_cfg.append("ComplianceRefConfig.mink_damping")
+            missing_ref_cfg.append("RefConfig.mink_damping")
         if cfg.q_start_idx is None:
-            missing_ref_cfg.append("ComplianceRefConfig.q_start_idx")
+            missing_ref_cfg.append("RefConfig.q_start_idx")
         if cfg.qd_start_idx is None:
-            missing_ref_cfg.append("ComplianceRefConfig.qd_start_idx")
+            missing_ref_cfg.append("RefConfig.qd_start_idx")
         if missing_ref_cfg:
             raise ValueError(
                 "Missing required compliance reference configuration: "
@@ -267,8 +308,7 @@ class ComplianceController:
     ) -> tuple[Dict[str, npt.NDArray[np.float32]], Optional[ComplianceState]]:
         """Run one loop and return estimated wrenches and optional compliance state."""
         command_matrix = np.asarray(command_matrix, dtype=np.float32).copy()
-        self.wrench_sim.set_qpos(np.asarray(qpos, dtype=np.float32))
-        self.wrench_sim.forward()
+        self.sync_qpos(qpos)
 
         base_pos_est = (
             np.asarray(base_pos, dtype=np.float32).copy()
@@ -394,3 +434,6 @@ class ComplianceController:
             )
             self._last_state = state_ref
         return wrenches, state_ref
+
+    def close(self) -> None:
+        self.wrench_sim.close()

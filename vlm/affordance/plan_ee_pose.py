@@ -9,7 +9,7 @@ import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 
-from ..utils.math_utils import ensure_matrix, get_damping_matrix
+from minimalist_compliance_control.utils import ensure_matrix, get_damping_matrix
 
 TODDY_LEFT_CAMERA_POSITION: npt.NDArray[np.float32] = np.array(
     [0.01, -0.004 + 0.033 / 2.0, 0.048], dtype=np.float32
