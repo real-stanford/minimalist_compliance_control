@@ -275,15 +275,9 @@ class CompliancePolicy:
             np.asarray(obs.motor_pos, dtype=np.float32).copy()
         )
 
-        if state_ref is not None:
-            self.x_ref_log.append(np.asarray(state_ref.x_ref, dtype=np.float32).copy())
-            self.x_ik_log.append(np.asarray(state_ref.x_ik, dtype=np.float32).copy())
-            action = np.asarray(state_ref.motor_pos, dtype=np.float32)
-        else:
-            pose_fallback = np.asarray(self.pose_command, dtype=np.float32).copy()
-            self.x_ref_log.append(pose_fallback.copy())
-            self.x_ik_log.append(pose_fallback.copy())
-            action = self.default_motor_pos.copy()
+        self.x_ref_log.append(np.asarray(state_ref.x_ref, dtype=np.float32).copy())
+        self.x_ik_log.append(np.asarray(state_ref.x_ik, dtype=np.float32).copy())
+        action = np.asarray(state_ref.motor_pos, dtype=np.float32)
 
         if self.plotter is not None:
             self.plotter.update_from_wrench_sim(

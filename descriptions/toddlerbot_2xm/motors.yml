@@ -1,18 +1,18 @@
 motors:
     left_shoulder_pitch:
-        zero_pos: -1.572331
+        zero_pos: -1.56466
     left_shoulder_roll:
-        zero_pos: 2.815026
+        zero_pos: 1.61068
     left_shoulder_yaw_drive:
-        zero_pos: -3.028844
+        zero_pos: -0.662679
     left_elbow_roll:
-        zero_pos: 1.574376
+        zero_pos: 1.541651
     left_elbow_yaw_drive:
-        zero_pos: -1.417398
+        zero_pos: -1.451145
     left_wrist_pitch_drive:
-        zero_pos: 0.103458
+        zero_pos: 0.102777
     left_wrist_roll:
-        zero_pos: 3.121651
+        zero_pos: 3.098642
     right_shoulder_pitch:
         zero_pos: -2.842467
     right_shoulder_roll:

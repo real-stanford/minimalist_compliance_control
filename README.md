@@ -41,6 +41,15 @@ mcc-run-policy --policy compliance_dp --robot toddlerbot -- --help
 mcc-run-policy --policy compliance_vlm --robot toddlerbot -- --help
 ```
 
+## Diffusion Policy Checkpoint
+
+Download and unzip the diffusion policy checkpoint under `results/`:
+
+```bash
+cd results
+gdown --fuzzy https://drive.google.com/file/d/1c-NxnbCkwnZ9I5qnSQABOluMff5IX23k/view?usp=drive_link && unzip "$(ls -t *.zip | head -n 1)"
+```
+
 ## Foundation Stereo Engine
 
 The foundation stereo server requires the TensorRT engine file at:

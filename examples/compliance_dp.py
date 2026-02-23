@@ -1,7 +1,4 @@
-"""Compliance policy driven by diffusion-predicted pose commands.
-
-This keeps the old policy class structure but removes toddlerbot dependencies.
-"""
+"""Compliance policy driven by diffusion-predicted pose commands."""
 
 from __future__ import annotations
 
@@ -19,6 +16,7 @@ from typing import Any, List, Optional, Tuple
 
 import cv2
 import joblib
+import mujoco
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
@@ -26,6 +24,21 @@ from scipy.spatial.transform import Slerp
 
 from diffusion_policy.dp_model import DPModel
 from examples.compliance import CompliancePolicy
+from minimalist_compliance_control.utils import get_action_traj, interpolate_action
+from real_world.camera import Camera
+
+
+def normalize_source(source: Any) -> Optional[List[str]]:
+    if source is None:
+        return None
+    if isinstance(source, str):
+        items = [source]
+    else:
+        items = [str(item) for item in source]
+    cleaned = [
+        token.strip() for item in items for token in item.split(",") if token.strip()
+    ]
+    return cleaned or None
 
 
 @dataclass(frozen=True)
@@ -37,11 +50,21 @@ class DPConfig:
     image_horizon: int
     lowdim_obs_dim: int
     input_channels: int
-    obs_source: Optional[List[str]]
+    obs_source: List[str]
     action_source: Optional[List[str]]
 
     @classmethod
     def from_model(cls, model: DPModel) -> "DPConfig":
+        params = getattr(model, "params", None)
+        if not isinstance(params, dict):
+            raise TypeError("DPModel.params must be a dict.")
+
+        obs_source = normalize_source(params.get("obs_source"))
+        if not obs_source:
+            raise ValueError("Checkpoint params['obs_source'] is required.")
+
+        action_source = normalize_source(params.get("action_source"))
+
         return cls(
             use_ddpm=bool(model.use_ddpm),
             diffuse_steps=int(model.diffuse_steps),
@@ -50,12 +73,12 @@ class DPConfig:
             image_horizon=int(model.image_horizon),
             lowdim_obs_dim=int(model.lowdim_obs_dim),
             input_channels=int(model.input_channels),
-            obs_source=model.obs_source,
-            action_source=model.action_source,
+            obs_source=obs_source,
+            action_source=action_source,
         )
 
 
-def put_latest(queue_obj: mp.Queue, payload) -> None:
+def put_latest(queue_obj: mp.Queue, payload: Any) -> None:
     try:
         queue_obj.put_nowait(payload)
     except queue.Full:
@@ -77,15 +100,22 @@ def run_dp_inference_process(
     action_drop: int,
     input_queue: mp.Queue,
     output_queue: mp.Queue,
-    stop_event,
+    stop_event: Any,
 ) -> None:
-    dp_model = DPModel(
-        ckpt_path,
-        use_ddpm=bool(use_ddpm),
-        diffuse_steps=int(diffuse_steps),
-        action_horizon=action_horizon,
-    )
-    put_latest(output_queue, ("config", DPConfig.from_model(dp_model).__dict__))
+    try:
+        dp_model = DPModel(
+            ckpt_path,
+            use_ddpm=bool(use_ddpm),
+            diffuse_steps=int(diffuse_steps),
+            action_horizon=action_horizon,
+        )
+        cfg = DPConfig.from_model(dp_model)
+    except Exception as exc:
+        put_latest(output_queue, ("error", f"Inference process init failed: {exc}"))
+        return
+
+    put_latest(output_queue, ("config", cfg.__dict__))
+    drop_count_cfg = max(0, int(action_drop))
 
     while not stop_event.is_set():
         try:
@@ -103,7 +133,7 @@ def run_dp_inference_process(
             put_latest(output_queue, ("error", str(exc), float(obs_time)))
             continue
 
-        drop_count = max(0, min(int(action_drop), len(action_seq)))
+        drop_count = max(0, min(drop_count_cfg, len(action_seq)))
         action_seq = action_seq[drop_count:]
         put_latest(
             output_queue,
@@ -120,105 +150,93 @@ class ComplianceDPPolicy(CompliancePolicy):
         robot: str,
         init_motor_pos: npt.ArrayLike,
         ckpt: str = "",
-        dt: float = 0.02,
-        num_sites: int = 0,
-        image_height: int = 96,
-        image_width: int = 96,
-        kp_pos: float = 100.0,
-        kp_rot: float = 10.0,
-        use_camera_stream: bool = False,
+        record_video: bool = False,
     ) -> None:
+        if robot != "toddlerbot":
+            raise ValueError(f"Unsupported robot: {robot}")
+
         super().__init__(
             name=name,
             robot=robot,
             init_motor_pos=init_motor_pos,
+            config_name="toddlerbot_dp.gin",
+            show_help=False,
         )
+
         if not ckpt:
             raise ValueError("ComplianceDPPolicy requires ckpt path.")
 
-        self.use_camera_stream = bool(use_camera_stream)
-        self.image_height = int(image_height)
-        self.image_width = int(image_width)
+        cfg_ref_motor_pos = np.asarray(
+            self.compliance_cfg.ref_motor_pos, dtype=np.float32
+        ).reshape(-1)
+        if cfg_ref_motor_pos.size > 0:
+            if cfg_ref_motor_pos.shape[0] != self.default_motor_pos.shape[0]:
+                raise ValueError(
+                    "ComplianceConfig.ref_motor_pos has wrong size: "
+                    f"expected {self.default_motor_pos.shape[0]}, "
+                    f"got {cfg_ref_motor_pos.shape[0]}."
+                )
+            self.ref_motor_pos = cfg_ref_motor_pos.copy()
 
-        if int(num_sites) > 0 and int(num_sites) != self.num_sites:
-            raise ValueError(
-                f"num_sites {num_sites} does not match configured site count {self.num_sites}."
-            )
-
-        self.set_stiffness(
-            [float(kp_pos), float(kp_pos), float(kp_pos)],
-            [float(kp_rot), float(kp_rot), float(kp_rot)],
+        model = self.controller.wrench_sim.model
+        actuator_names = [
+            str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i))
+            for i in range(int(model.nu))
+        ]
+        self.neck_pitch_idx: Optional[int] = (
+            actuator_names.index("neck_pitch_act")
+            if "neck_pitch_act" in actuator_names
+            else None
         )
 
-        self.camera = None
-        if self.use_camera_stream:
-            try:
-                from real_world.camera import Camera
-
-                self.camera = Camera("left")
-            except Exception as exc:
-                self.camera = None
-                print(f"[ComplianceDP] camera stream disabled: {exc}")
-
-        self.action_dt = float(dt)
+        self.model_action_seq: List[Tuple[float, npt.NDArray[np.float32]]] = []
         self.action_drop = 0
-        self.interpolate_action = True
+        self.action_seq_timestamp = 0.0
+
+        self.dp_output_time_buffer: deque[float] = deque(maxlen=20000)
+        self.dp_output_buffer: deque[npt.NDArray[np.float32]] = deque(maxlen=20000)
+        self.dp_output_batch_buffer: deque[int] = deque(maxlen=20000)
+        self.dp_output_last_time = -float("inf")
+        self.dp_output_batch_id = -1
+
+        self.action_delta_threshold = 0.02
+        self.action_stall_duration_s = 1.0
+        self.post_prep_grace_s = 30.0
+        self.post_prep_time_out_s = 40.0
         self.action_blend_alpha = 0.9
         self.action_blend_min_alpha = 0.1
         self.action_blend_ramp_steps = 3
-        self.action_blend_ramp_s = self.action_dt * float(self.action_blend_ramp_steps)
-
-        self.expected_channels = 1
-        self.lowdim_obs_dim = 0
-        self.dp_action_horizon = 1
-        self.action_max_age_s = self.action_dt * 2.0
-
-        self.obs_source: Optional[List[str]] = None
-        self.action_source: Optional[List[str]] = None
-
-        self.obs_deque: deque = deque([], maxlen=1)
-        self.image_deque: deque = deque([], maxlen=1)
-        self.model_action_seq: List[Tuple[float, npt.NDArray[np.float32]]] = []
-        self.action_seq_timestamp = 0.0
-        self.last_status = "init"
-        self.action_dim_warned = False
-        self.reset_time: Optional[np.ndarray] = None
-        self.reset_action: Optional[np.ndarray] = None
+        self.low_action_start_time: Optional[float] = None
+        self.last_model_action: Optional[npt.NDArray[np.float32]] = None
+        self.reset_time: Optional[npt.NDArray[np.float32]] = None
+        self.reset_action: Optional[npt.NDArray[np.float32]] = None
         self.reset_start_time: Optional[float] = None
         self.pending_eval_prompt = False
         self.pending_eval_duration: Optional[float] = None
         self.eval_start_time: Optional[float] = None
         self.defer_eval_start = False
-        self.trial_start_mono = time.monotonic()
         self.eval_durations: List[float] = []
         self.eval_success_flags: List[bool] = []
         self.eval_success_count = 0
         self.eval_total_count = 0
         self.eval_reset_count = 0
-        self.eval_last_reset_time: Optional[float] = None
-        self.action_delta_threshold = 0.02
-        self.action_stall_duration_s = 1.0
-        self.post_prep_grace_s = 30.0
-        self.post_prep_time_out_s = 40.0
-        self.low_action_start_time: Optional[float] = None
-        self.last_model_action: Optional[np.ndarray] = None
+        self.trial_start_mono = time.monotonic()
 
-        self.dp_output_time_buffer: deque = deque(maxlen=20000)
-        self.dp_output_buffer: deque = deque(maxlen=20000)
-        self.dp_output_batch_buffer: deque = deque(maxlen=20000)
-        self.dp_output_last_time = -float("inf")
-        self.dp_output_batch_id = -1
+        self.left_camera: Optional[Camera] = None
+        try:
+            self.left_camera = Camera("left")
+        except Exception:
+            self.left_camera = None
 
-        self.record_video = bool(self.use_camera_stream)
+        self.record_video = bool(record_video)
         self.video_logging_active = False
         self.video_writer: Optional[cv2.VideoWriter] = None
         self.video_temp_dir: Optional[tempfile.TemporaryDirectory] = None
         self.video_path: Optional[Path] = None
-        self.video_fps: Optional[float] = None
         self.last_camera_frame: Optional[np.ndarray] = None
         self.video_capture_thread: Optional[threading.Thread] = None
         self.video_capture_stop: Optional[threading.Event] = None
-        self.video_frame_timestamps: list[float] = []
+        self.video_frame_timestamps: List[float] = []
 
         ctx = mp.get_context("spawn")
         self.inference_input_queue = ctx.Queue(maxsize=1)
@@ -241,27 +259,41 @@ class ComplianceDPPolicy(CompliancePolicy):
         )
         self.inference_process.start()
 
-        cfg = self.read_dp_config_from_process()
-        self.obs_source = cfg.get("obs_source")
-        self.action_source = cfg.get("action_source")
+        dp_cfg = self.read_dp_config_from_process()
+        self.obs_source = list(dp_cfg.obs_source)
+        self.action_source = dp_cfg.action_source
+        if self.action_source and "x_ref" in self.action_source:
+            self.use_compliance = False
 
-        self.expected_channels = int(cfg.get("input_channels", 1))
-        self.lowdim_obs_dim = int(cfg.get("lowdim_obs_dim", 0))
-        self.dp_action_horizon = int(cfg.get("action_horizon", 1))
-        self.action_max_age_s = self.action_dt * float(self.dp_action_horizon + 1)
+        self.expected_channels = (
+            int(dp_cfg.input_channels) if dp_cfg.input_channels is not None else 1
+        )
+        self.action_dt = 0.1
+        self.action_blend_ramp_s = self.action_dt * float(self.action_blend_ramp_steps)
+        self.interpolate_action = True
+        self.image_height = 96
+        self.image_width = 96
+        self.lowdim_obs_dim = 0
+        self.action_max_age_s = max(
+            2.0, float(self.action_dt) * float(dp_cfg.action_horizon + 1)
+        )
 
-        self.obs_deque = deque([], maxlen=int(cfg.get("obs_horizon", 1)))
-        self.image_deque = deque([], maxlen=int(cfg.get("image_horizon", 1)))
+        self.obs_deque: deque[npt.NDArray[np.float32]] = deque(
+            [], maxlen=max(1, int(dp_cfg.obs_horizon))
+        )
+        self.image_deque: deque[npt.NDArray[np.float32]] = deque(
+            [], maxlen=max(1, int(dp_cfg.image_horizon))
+        )
 
         self._closed = False
 
-    def _read_config_from_process(self, timeout_s: float = 30.0) -> dict[str, Any]:
+    def read_dp_config_from_process(self, timeout_s: float = 30.0) -> DPConfig:
         deadline = time.monotonic() + float(timeout_s)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError(
-                    "Timed out waiting for DP config from inference process"
+                    "Timed out waiting for DP config from inference process."
                 )
             try:
                 payload = self.inference_output_queue.get(timeout=remaining)
@@ -274,29 +306,30 @@ class ComplianceDPPolicy(CompliancePolicy):
                 and payload[0] == "config"
                 and isinstance(payload[1], dict)
             ):
-                return dict(payload[1])
+                return DPConfig(**payload[1])
 
             if (
                 isinstance(payload, tuple)
                 and len(payload) >= 2
                 and payload[0] == "error"
             ):
-                raise RuntimeError(f"Inference process init failed: {payload[1]}")
-
-    def read_dp_config_from_process(self, timeout_s: float = 30.0) -> dict[str, Any]:
-        return self._read_config_from_process(timeout_s=timeout_s)
-
-    def get_expected_channels(self) -> int:
-        return int(self.expected_channels)
+                raise RuntimeError(str(payload[1]))
 
     def _to_hwc_u8(self, image: np.ndarray) -> np.ndarray:
         arr = np.asarray(image)
-        if arr.ndim != 3:
-            arr = np.zeros((self.image_height, self.image_width, 3), dtype=np.uint8)
-        if arr.shape[0] in (1, 3) and arr.shape[2] not in (1, 3):
+        if arr.ndim == 2:
+            arr = np.repeat(arr[:, :, None], 3, axis=2)
+        elif arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[2] not in (1, 3):
             arr = np.transpose(arr, (1, 2, 0))
+        elif arr.ndim != 3:
+            arr = np.zeros((self.image_height, self.image_width, 3), dtype=np.uint8)
+
+        if arr.ndim != 3 or arr.shape[2] not in (1, 3):
+            arr = np.zeros((self.image_height, self.image_width, 3), dtype=np.uint8)
+
         if arr.shape[2] == 1:
             arr = np.repeat(arr, 3, axis=2)
+
         if arr.dtype != np.uint8:
             max_v = float(arr.max()) if arr.size else 0.0
             if max_v <= 1.0:
@@ -304,40 +337,11 @@ class ComplianceDPPolicy(CompliancePolicy):
             arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
         return arr
 
-    def get_image_obs(self, obs: Any) -> Optional[np.ndarray]:
-        if self.camera is not None:
-            frame = None
-            if (
-                self.video_capture_thread is not None
-                and self.video_capture_thread.is_alive()
-            ):
-                frame = self.last_camera_frame
-            if frame is None:
-                try:
-                    frame = self.camera.get_frame()
-                except Exception:
-                    frame = None
-            if frame is not None:
-                return self._to_hwc_u8(frame)
-        if getattr(obs, "image", None) is None:
-            return None
-        return self._to_hwc_u8(np.asarray(obs.image))
-
-    def _prepare_image(self, image: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    def prepare_image(self, image: Optional[np.ndarray]) -> Optional[np.ndarray]:
         if image is None:
             return None
 
-        arr = np.asarray(image)
-        if arr.ndim == 2:
-            resized = cv2.resize(arr, (128, 96))[:, 16:112]
-            resized = resized.astype(np.float32)
-            if float(resized.max()) > 1.0:
-                resized /= 255.0
-            return resized[None, :, :]
-
-        if arr.ndim != 3:
-            return None
-
+        arr = self._to_hwc_u8(np.asarray(image))
         if self.expected_channels == 1:
             gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
             resized = cv2.resize(gray, (128, 96))[:, 16:112]
@@ -353,370 +357,21 @@ class ComplianceDPPolicy(CompliancePolicy):
             resized /= 255.0
         return resized.transpose(2, 0, 1)
 
-    def prepare_image(self, image: np.ndarray) -> Optional[np.ndarray]:
-        return self._prepare_image(image)
-
-    def get_x_wrench(self) -> np.ndarray:
-        rows = []
-        for site_name in self.wrench_site_names:
-            wrench = self.wrenches_by_site.get(site_name)
-            if wrench is None:
-                rows.append(np.zeros(6, dtype=np.float32))
-            else:
-                rows.append(np.asarray(wrench, dtype=np.float32).reshape(6))
-        return np.stack(rows, axis=0)
-
-    def get_obs(
-        self,
-        obs: Any,
-        x_obs: npt.NDArray[np.float32],
-    ) -> npt.NDArray[np.float32]:
-        if self.obs_source:
-            components: list[np.ndarray] = []
-            for source in self.obs_source:
-                if source == "x_obs":
-                    components.append(np.asarray(x_obs, dtype=np.float32).reshape(-1))
-                elif source == "x_wrench":
-                    components.append(self.get_x_wrench().reshape(-1))
-                elif source == "obs_motor_pos":
-                    components.append(
-                        np.asarray(obs.motor_pos, dtype=np.float32).reshape(-1)
-                    )
-                else:
-                    raise ValueError(f"Unsupported obs_source token: {source}")
-            return np.concatenate(components, axis=0).astype(np.float32)
-
-        x_obs_vec = np.asarray(x_obs, dtype=np.float32).reshape(-1)
-        if self.lowdim_obs_dim <= 0:
-            return x_obs_vec
-        if x_obs_vec.size >= self.lowdim_obs_dim:
-            return x_obs_vec[: self.lowdim_obs_dim]
-        motor = np.asarray(obs.motor_pos, dtype=np.float32).reshape(-1)
-        if motor.size >= self.lowdim_obs_dim:
-            return motor[: self.lowdim_obs_dim]
-        pad = np.zeros(self.lowdim_obs_dim - motor.size, dtype=np.float32)
-        return np.concatenate([motor, pad])
-
-    def _clear_queue(self, queue_obj: mp.Queue) -> None:
-        while True:
-            try:
-                queue_obj.get_nowait()
-            except queue.Empty:
-                break
-
-    def clear_queue(self, queue_obj: mp.Queue) -> None:
-        self._clear_queue(queue_obj)
-
-    def get_action_blend_alpha(self, timestamp: float, now: float) -> float:
-        ramp_s = float(self.action_blend_ramp_s)
-        if ramp_s <= 0.0:
-            return float(self.action_blend_alpha)
-
-        t = (timestamp - now) / ramp_s
-        t = float(np.clip(t, 0.0, 1.0))
-        min_alpha = min(self.action_blend_min_alpha, self.action_blend_alpha)
-        return float(min_alpha + (self.action_blend_alpha - min_alpha) * t)
-
-    def reset_diffusion_state(self) -> None:
-        self.obs_deque.clear()
-        self.image_deque.clear()
-        self.model_action_seq = []
-        self.action_seq_timestamp = 0.0
-        self._clear_queue(self.inference_input_queue)
-        self._clear_queue(self.inference_output_queue)
-        self.action_dim_warned = False
-        self.low_action_start_time = None
-        self.last_model_action = None
-
-    def _submit_inference_request(self, obs_time: float) -> None:
-        payload = (list(self.obs_deque), list(self.image_deque), float(obs_time))
-        put_latest(self.inference_input_queue, payload)
-
-    def submit_inference_request(self, obs_time: float) -> None:
-        self._submit_inference_request(obs_time)
-
-    def _consume_inference_output(self, now: float) -> None:
-        latest = None
-        while True:
-            try:
-                latest = self.inference_output_queue.get_nowait()
-            except queue.Empty:
-                break
-
-        if latest is None or not isinstance(latest, tuple):
-            return
-        if len(latest) >= 2 and latest[0] == "error":
-            print(f"[ComplianceDP] inference error: {latest[1]}")
-            return
-        if not (len(latest) >= 5 and latest[0] == "action"):
-            return
-
-        _, action_seq, obs_time, _dur, _drop = latest
-        if now - float(obs_time) > self.action_max_age_s:
-            return
-
-        base_time = float(obs_time)
-        new_seq = [
-            (base_time + idx * self.action_dt, np.asarray(action, dtype=np.float32))
-            for idx, action in enumerate(action_seq)
-        ]
-
-        if not self.model_action_seq:
-            self.model_action_seq = new_seq
-        else:
-            blended: List[Tuple[float, npt.NDArray[np.float32]]] = []
-            prev_seq = self.model_action_seq
-            prev_idx = 0
-            tol = self.action_dt * 0.5
-            for timestamp, action in new_seq:
-                while (
-                    prev_idx < len(prev_seq) and prev_seq[prev_idx][0] < timestamp - tol
-                ):
-                    prev_idx += 1
-                if (
-                    prev_idx < len(prev_seq)
-                    and abs(prev_seq[prev_idx][0] - timestamp) <= tol
-                ):
-                    prev_action = np.asarray(prev_seq[prev_idx][1], dtype=np.float32)
-                    if prev_action.shape == action.shape:
-                        alpha = self.get_action_blend_alpha(timestamp, now)
-                        merged = alpha * action + (1.0 - alpha) * prev_action
-                        blended.append((timestamp, merged.astype(np.float32)))
-                    else:
-                        blended.append((timestamp, action))
-                else:
-                    blended.append((timestamp, action))
-            self.model_action_seq = blended
-
-        self.action_seq_timestamp = base_time
-        self.dp_output_batch_id += 1
-        self.append_dp_output_log(self.dp_output_batch_id)
-
-    def consume_inference_output(self, now: float) -> None:
-        self._consume_inference_output(now)
-
-    def _action_to_pose_command(
-        self, action: npt.NDArray[np.float32]
-    ) -> Optional[npt.NDArray[np.float32]]:
-        act = np.asarray(action, dtype=np.float32).reshape(-1)
-        expected = self.num_sites * 6
-        if act.size == expected:
-            return act.reshape(self.num_sites, 6)
-        if act.size == 6:
-            if self.pose_command is None:
-                pose = np.asarray(self.default_state.x_ref, dtype=np.float32).copy()
-            else:
-                pose = np.asarray(self.pose_command, dtype=np.float32).copy()
-            pose[0] = act
-            return pose
-        return None
-
-    def action_to_pose_command(
-        self, action: npt.NDArray[np.float32]
-    ) -> Optional[npt.NDArray[np.float32]]:
-        return self._action_to_pose_command(action)
-
-    def _interpolate_pose_action(
-        self,
-        action0: npt.NDArray[np.float32],
-        action1: npt.NDArray[np.float32],
-        alpha: float,
-    ) -> npt.NDArray[np.float32]:
-        a0 = np.asarray(action0, dtype=np.float32).reshape(-1)
-        a1 = np.asarray(action1, dtype=np.float32).reshape(-1)
-        if a0.size != a1.size:
-            return a1
-        if alpha <= 0.0:
-            return a0
-        if alpha >= 1.0:
-            return a1
-
-        p0 = self._action_to_pose_command(a0)
-        p1 = self._action_to_pose_command(a1)
-        if p0 is None or p1 is None:
-            return (1.0 - alpha) * a0 + alpha * a1
-
-        out = p0.copy()
-        out[:, :3] = (1.0 - alpha) * p0[:, :3] + alpha * p1[:, :3]
-        for idx in range(p0.shape[0]):
-            key_rots = R.from_rotvec(np.stack([p0[idx, 3:6], p1[idx, 3:6]], axis=0))
-            slerp = Slerp([0.0, 1.0], key_rots)
-            out[idx, 3:6] = slerp([alpha]).as_rotvec()[0].astype(np.float32)
-        return out.reshape(-1)
-
-    def interpolate_pose_action(
-        self,
-        action0: npt.NDArray[np.float32],
-        action1: npt.NDArray[np.float32],
-        alpha: float,
-    ) -> npt.NDArray[np.float32]:
-        return self._interpolate_pose_action(action0, action1, alpha)
-
-    def _select_action_for_time(self, now: float) -> npt.NDArray[np.float32]:
-        if len(self.model_action_seq) == 1:
-            return self.model_action_seq[0][1]
-        if now <= self.model_action_seq[0][0]:
-            return self.model_action_seq[0][1]
-        if now >= self.model_action_seq[-1][0]:
-            return self.model_action_seq[-1][1]
-
-        for idx, (ts, action) in enumerate(self.model_action_seq):
-            if now <= ts:
-                prev_ts, prev_action = self.model_action_seq[idx - 1]
-                if ts <= prev_ts:
-                    return action
-                if not self.interpolate_action:
-                    return prev_action if (now - prev_ts) <= (ts - now) else action
-                alpha = (now - prev_ts) / (ts - prev_ts)
-                return self._interpolate_pose_action(prev_action, action, float(alpha))
-        return self.model_action_seq[-1][1]
-
-    def select_action_for_time(self, now: float) -> npt.NDArray[np.float32]:
-        return self._select_action_for_time(now)
-
-    def start_reset_motion(self, obs: Any) -> None:
-        if self.reset_time is not None:
-            return
-        self.eval_reset_count += 1
-        self.eval_last_reset_time = float(obs.time)
-        if self.eval_start_time is not None:
-            self.pending_eval_duration = float(obs.time - self.eval_start_time)
-        self.eval_start_time = None
-        self.reset_start_time = float(obs.time)
-
-        start = np.asarray(obs.motor_pos, dtype=np.float32).reshape(-1)
-        goal = np.asarray(self.ref_motor_pos, dtype=np.float32).reshape(-1)
-        n_steps = max(2, int(round(2.0 / max(self.control_dt, 1e-3))))
-        t_arr = np.linspace(0.0, 2.0, n_steps, dtype=np.float32)
-        alpha = np.linspace(0.0, 1.0, n_steps, dtype=np.float32)[:, None]
-        self.reset_action = (
-            (1.0 - alpha) * start[None, :] + alpha * goal[None, :]
-        ).astype(np.float32)
-        self.reset_time = t_arr
-        self.pending_eval_prompt = True
-        self.reset_diffusion_state()
-
-    def check_action_stall(self, obs: Any, action: npt.NDArray[np.float32]) -> None:
-        if self.reset_time is not None or self.pending_eval_prompt:
-            return
-        obs_time = float(obs.time)
-        action_vec = np.asarray(action, dtype=np.float32).reshape(-1)
-        prep_duration = float(getattr(self, "prep_duration", 0.0))
-        if self.eval_start_time is None:
-            if self.defer_eval_start:
-                self.eval_start_time = obs_time
-                self.defer_eval_start = False
-            else:
-                if obs_time < prep_duration:
-                    self.low_action_start_time = None
-                    self.last_model_action = action_vec
-                    return
-                self.eval_start_time = obs_time
-
-        if obs_time - self.eval_start_time < self.post_prep_grace_s:
-            self.low_action_start_time = None
-            self.last_model_action = action_vec
-            return
-        if obs_time - self.eval_start_time >= self.post_prep_time_out_s:
-            self.start_reset_motion(obs)
-            return
-
+    def get_image_obs(self) -> Optional[np.ndarray]:
+        if self.left_camera is None:
+            return None
         if (
-            self.last_model_action is None
-            or self.last_model_action.shape != action_vec.shape
+            self.video_capture_thread is None
+            or not self.video_capture_thread.is_alive()
         ):
-            self.last_model_action = action_vec
-            self.low_action_start_time = None
-            return
-
-        compare_len = min(3, action_vec.size, self.last_model_action.size)
-        delta = float(
-            np.max(
-                np.abs(action_vec[:compare_len] - self.last_model_action[:compare_len])
-            )
-        )
-        if delta < self.action_delta_threshold:
-            if self.low_action_start_time is None:
-                self.low_action_start_time = obs_time
-            elif obs_time - self.low_action_start_time >= self.action_stall_duration_s:
-                self.start_reset_motion(obs)
-                return
-        else:
-            self.low_action_start_time = None
-        self.last_model_action = action_vec
-
-    def prompt_eval_result(self, duration: Optional[float]) -> None:
-        try:
-            response = input("Is the last eval successful? [y/n]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            response = "n"
-        success = response in ("y", "yes")
-        self.eval_total_count += 1
-        if success:
-            self.eval_success_count += 1
-        duration_val = float(duration) if duration is not None else float("nan")
-        self.eval_durations.append(duration_val)
-        self.eval_success_flags.append(success)
-        self.pending_eval_duration = None
-
-    def save_eval_results(self, exp_folder_path: str) -> None:
-        if self.eval_total_count == 0 or not exp_folder_path:
-            return
-        os.makedirs(exp_folder_path, exist_ok=True)
-        success_rate = self.eval_success_count / float(self.eval_total_count)
-        valid = np.asarray(self.eval_durations, dtype=np.float32)
-        valid = valid[~np.isnan(valid)]
-        avg_duration = float(np.mean(valid)) if valid.size else float("nan")
-        out_path = os.path.join(exp_folder_path, "eval.txt")
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(f"success_rate: {success_rate:.3f}\n")
-            f.write(f"success_count: {self.eval_success_count}\n")
-            f.write(f"eval_count: {self.eval_total_count}\n")
-            f.write(f"avg_duration: {avg_duration:.3f}\n")
-            f.write(f"reset_count: {self.eval_reset_count}\n")
-            for idx, (ok, dur) in enumerate(
-                zip(self.eval_success_flags, self.eval_durations, strict=False), start=1
-            ):
-                f.write(f"Trial {idx}: success={ok}, {float(dur):.3f} (duration)\n")
-
-    def append_dp_output_log(self, batch_id: int) -> None:
-        for timestamp, action in self.model_action_seq:
-            if float(timestamp) <= float(self.dp_output_last_time):
-                continue
-            self.dp_output_time_buffer.append(float(timestamp))
-            self.dp_output_buffer.append(
-                np.asarray(action, dtype=np.float32).reshape(-1).copy()
-            )
-            self.dp_output_batch_buffer.append(int(batch_id))
-            self.dp_output_last_time = float(timestamp)
-
-    def save_dp_output_log(self, exp_folder_path: str) -> None:
-        if not exp_folder_path:
-            return
-        times_full = np.asarray(self.dp_output_time_buffer, dtype=np.float64)
-        if times_full.size == 0:
-            return
-        actions_full = np.asarray(list(self.dp_output_buffer), dtype=np.float32)
-        batch_full = np.asarray(self.dp_output_batch_buffer, dtype=np.int64)
-        min_len = min(times_full.size, actions_full.shape[0], batch_full.size)
-        if min_len == 0:
-            return
-        log_data = {
-            "time": times_full[-min_len:],
-            "action": actions_full[-min_len:],
-            "batch_id": batch_full[-min_len:],
-            "action_dt": float(self.action_dt),
-            "num_sites": int(self.num_sites),
-        }
-        os.makedirs(exp_folder_path, exist_ok=True)
-        joblib.dump(
-            log_data, os.path.join(exp_folder_path, "dp_output.lz4"), compress="lz4"
-        )
+            self.start_video_capture_thread()
+        frame = self.last_camera_frame
+        if frame is None:
+            return None
+        return self.prepare_image(frame)
 
     def start_video_logging(self) -> None:
-        if self.video_logging_active:
-            return
-        if self.camera is None:
+        if self.video_logging_active or self.left_camera is None:
             return
         self.discard_video_recording()
         self.video_logging_active = True
@@ -745,7 +400,6 @@ class ComplianceDPPolicy(CompliancePolicy):
                 self.video_capture_stop.set()
             return False
         self.video_writer = writer
-        self.video_fps = fps
         return True
 
     def start_video_capture_thread(self) -> None:
@@ -771,31 +425,43 @@ class ComplianceDPPolicy(CompliancePolicy):
         self.video_capture_stop = None
 
     def video_capture_worker(self) -> None:
-        if self.camera is None:
+        if self.left_camera is None:
             return
+
         capture_dt = max(float(self.control_dt), 1e-3)
-        start_time = time.monotonic()
-        next_time = start_time
+        next_time = time.monotonic()
+        start_time = next_time
+
         while True:
             if self.video_capture_stop is not None and self.video_capture_stop.is_set():
                 break
+
             now = time.monotonic()
             if now < next_time:
                 time.sleep(next_time - now)
             next_time += capture_dt
+
             try:
-                frame = self.camera.get_frame()
+                frame = self.left_camera.get_frame()
             except Exception:
                 self.last_camera_frame = None
                 continue
-            self.last_camera_frame = frame
+
+            if frame is None:
+                self.last_camera_frame = None
+                continue
+
+            frame_u8 = self._to_hwc_u8(frame)
+            self.last_camera_frame = frame_u8
+
             if not self.video_logging_active:
                 continue
-            if frame is None or not self.ensure_video_writer(frame):
+            if not self.ensure_video_writer(frame_u8):
                 continue
             if self.video_writer is None:
                 continue
-            self.video_writer.write(frame)
+
+            self.video_writer.write(frame_u8)
             self.video_frame_timestamps.append(float(time.monotonic() - start_time))
 
     def discard_video_recording(self) -> None:
@@ -807,7 +473,6 @@ class ComplianceDPPolicy(CompliancePolicy):
             self.video_temp_dir.cleanup()
             self.video_temp_dir = None
         self.video_path = None
-        self.video_fps = None
         self.video_frame_timestamps = []
         self.video_logging_active = False
 
@@ -824,68 +489,421 @@ class ComplianceDPPolicy(CompliancePolicy):
             dest_path.unlink()
         shutil.copy2(self.video_path, dest_path)
 
-    def _step_diffusion(self, obs: Any, x_obs: npt.NDArray[np.float32]) -> str:
-        image = self.get_image_obs(obs)
-        proc_img = self._prepare_image(image)
-        if proc_img is None:
-            self.reset_diffusion_state()
-            return "no_image"
+    def get_x_wrench(self) -> npt.NDArray[np.float32]:
+        rows: List[np.ndarray] = []
+        for site_name in self.wrench_site_names:
+            wrench = self.wrenches_by_site.get(site_name)
+            if wrench is None:
+                rows.append(np.zeros(6, dtype=np.float32))
+            else:
+                rows.append(np.asarray(wrench, dtype=np.float32).reshape(6))
+        return np.asarray(rows, dtype=np.float32)
 
-        obs_vec = self.get_obs(obs, x_obs)
-        self.obs_deque.append(obs_vec)
-        self.image_deque.append(proc_img)
+    def get_obs(
+        self, obs: Any, x_obs: Optional[npt.NDArray[np.float32]]
+    ) -> npt.NDArray[np.float32]:
+        if self.obs_source:
+            components: List[np.ndarray] = []
+            for source in self.obs_source:
+                if source == "x_obs":
+                    if x_obs is not None:
+                        x_obs_val = np.asarray(x_obs, dtype=np.float32).reshape(-1)
+                    elif len(self.x_obs_log) > 0:
+                        x_obs_val = np.asarray(
+                            self.x_obs_log[-1], dtype=np.float32
+                        ).reshape(-1)
+                    else:
+                        x_obs_val = np.asarray(
+                            self.default_state.x_ref, dtype=np.float32
+                        ).reshape(-1)
+                    components.append(x_obs_val)
+                elif source == "x_wrench":
+                    components.append(self.get_x_wrench().reshape(-1))
+                elif source == "obs_motor_pos":
+                    components.append(
+                        np.asarray(obs.motor_pos, dtype=np.float32).reshape(-1)
+                    )
+                else:
+                    raise ValueError(f"Unsupported obs_source token: {source}")
+            return np.concatenate(components, axis=0).astype(np.float32)
 
-        if len(self.obs_deque) < self.obs_deque.maxlen:
-            return "warming_obs"
-        if len(self.image_deque) < self.image_deque.maxlen:
-            return "warming_image"
+        if self.lowdim_obs_dim <= 0:
+            if x_obs is not None:
+                return np.asarray(x_obs, dtype=np.float32).reshape(-1)
+            return np.asarray(obs.motor_pos, dtype=np.float32).reshape(-1)
 
-        now = float(time.monotonic() - self.trial_start_mono)
-        self._consume_inference_output(now)
-        self._submit_inference_request(now)
+        if x_obs is not None:
+            x_obs_vec = np.asarray(x_obs, dtype=np.float32).reshape(-1)
+            if x_obs_vec.size >= self.lowdim_obs_dim:
+                return x_obs_vec[: self.lowdim_obs_dim]
 
-        if (
-            self.model_action_seq
-            and now - self.action_seq_timestamp > self.action_max_age_s
-        ):
-            self.model_action_seq = []
+        motor = np.asarray(obs.motor_pos, dtype=np.float32).reshape(-1)
+        if motor.size >= self.lowdim_obs_dim:
+            return motor[: self.lowdim_obs_dim]
+        pad = np.zeros(self.lowdim_obs_dim - motor.size, dtype=np.float32)
+        return np.concatenate([motor, pad])
+
+    def clear_queue(self, queue_obj: mp.Queue) -> None:
+        while True:
+            try:
+                queue_obj.get_nowait()
+            except queue.Empty:
+                break
+
+    def submit_inference_request(self, obs_time: float) -> None:
+        payload = (list(self.obs_deque), list(self.image_deque), float(obs_time))
+        put_latest(self.inference_input_queue, payload)
+
+    def consume_inference_output(self, now: float) -> None:
+        latest = None
+        while True:
+            try:
+                latest = self.inference_output_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        if latest is None or not isinstance(latest, tuple):
+            return
+        if len(latest) >= 2 and latest[0] == "error":
+            return
+        if not (len(latest) >= 5 and latest[0] == "action"):
+            return
+
+        _, action_seq, obs_time, _, _ = latest
+        age_s = now - float(obs_time)
+        if age_s > self.action_max_age_s:
+            return
+
+        base_time = float(obs_time)
+        new_seq = [
+            (base_time + idx * self.action_dt, np.asarray(action, dtype=np.float32))
+            for idx, action in enumerate(action_seq)
+        ]
 
         if not self.model_action_seq:
-            return "waiting_inference"
+            self.model_action_seq = new_seq
+        else:
+            blended_seq: List[Tuple[float, npt.NDArray[np.float32]]] = []
+            prev_seq = self.model_action_seq
+            prev_idx = 0
+            prev_len = len(prev_seq)
+            tol = float(self.action_dt) * 0.5
+            for timestamp, action in new_seq:
+                while prev_idx < prev_len and prev_seq[prev_idx][0] < timestamp - tol:
+                    prev_idx += 1
+                if (
+                    prev_idx < prev_len
+                    and abs(prev_seq[prev_idx][0] - timestamp) <= tol
+                ):
+                    prev_action = np.asarray(prev_seq[prev_idx][1], dtype=np.float32)
+                    if prev_action.shape == action.shape:
+                        alpha = self.get_action_blend_alpha(timestamp, now)
+                        action = alpha * action + (1.0 - alpha) * prev_action
+                    blended_seq.append((timestamp, action.astype(np.float32)))
+                else:
+                    blended_seq.append((timestamp, action))
+            self.model_action_seq = blended_seq
 
-        action = self._select_action_for_time(now)
-        pose_cmd = self._action_to_pose_command(action)
-        if pose_cmd is None:
-            if not self.action_dim_warned:
-                print(
-                    f"[ComplianceDP] Unexpected action dimension: {np.asarray(action).size}"
-                )
-                self.action_dim_warned = True
-            return f"invalid_action_dim_{np.asarray(action).size}"
+        self.action_seq_timestamp = base_time
+        self.dp_output_batch_id += 1
+        self.append_dp_output_log(self.dp_output_batch_id)
 
-        self.pose_command = pose_cmd.astype(np.float32)
-        self.check_action_stall(obs, np.asarray(action, dtype=np.float32))
-        return "ok"
+    def action_to_pose_command(
+        self, action: npt.NDArray[np.float32]
+    ) -> Optional[npt.NDArray[np.float32]]:
+        action_vec = np.asarray(action, dtype=np.float32).reshape(-1)
+        expected = self.num_sites * 6
+        if action_vec.size == expected:
+            return action_vec.reshape(self.num_sites, 6)
+        if action_vec.size == 6:
+            if self.pose_command is None:
+                return action_vec.reshape(1, 6)
+            pose = np.asarray(self.pose_command, dtype=np.float32).copy()
+            pose[0] = action_vec
+            return pose
+        return None
 
-    def update_pose_command_from_obs(
-        self, obs: Any, x_obs: npt.NDArray[np.float32]
-    ) -> None:
+    def interpolate_pose_action(
+        self,
+        action0: npt.NDArray[np.float32],
+        action1: npt.NDArray[np.float32],
+        alpha: float,
+    ) -> npt.NDArray[np.float32]:
+        action0_arr = np.asarray(action0, dtype=np.float32).reshape(-1)
+        action1_arr = np.asarray(action1, dtype=np.float32).reshape(-1)
+        if action0_arr.size != action1_arr.size:
+            return action1_arr
+        if alpha <= 0.0:
+            return action0_arr
+        if alpha >= 1.0:
+            return action1_arr
+
+        pose0 = self.action_to_pose_command(action0_arr)
+        pose1 = self.action_to_pose_command(action1_arr)
+        if pose0 is None or pose1 is None:
+            return (1.0 - alpha) * action0_arr + alpha * action1_arr
+
+        interp_pose = pose0.copy()
+        interp_pose[:, :3] = (1.0 - alpha) * pose0[:, :3] + alpha * pose1[:, :3]
+        for idx in range(pose0.shape[0]):
+            key_rots = R.from_rotvec(
+                np.stack([pose0[idx, 3:6], pose1[idx, 3:6]], axis=0)
+            )
+            slerp = Slerp([0.0, 1.0], key_rots)
+            interp_pose[idx, 3:6] = slerp([alpha]).as_rotvec()[0].astype(np.float32)
+        return interp_pose.reshape(-1)
+
+    def select_action_for_time(self, now: float) -> npt.NDArray[np.float32]:
+        if len(self.model_action_seq) == 1:
+            return self.model_action_seq[0][1]
+        if now <= self.model_action_seq[0][0]:
+            return self.model_action_seq[0][1]
+        if now >= self.model_action_seq[-1][0]:
+            return self.model_action_seq[-1][1]
+
+        for idx, (timestamp, action) in enumerate(self.model_action_seq):
+            if now <= timestamp:
+                prev_time, prev_action = self.model_action_seq[idx - 1]
+                if timestamp <= prev_time:
+                    return action
+                if not self.interpolate_action:
+                    return (
+                        prev_action
+                        if (now - prev_time) <= (timestamp - now)
+                        else action
+                    )
+                alpha = (now - prev_time) / (timestamp - prev_time)
+                return self.interpolate_pose_action(prev_action, action, float(alpha))
+        return self.model_action_seq[-1][1]
+
+    def get_action_blend_alpha(self, timestamp: float, now: float) -> float:
+        ramp_s = float(self.action_blend_ramp_s)
+        if ramp_s <= 0.0:
+            return float(self.action_blend_alpha)
+        t = float(np.clip((timestamp - now) / ramp_s, 0.0, 1.0))
+        min_alpha = min(
+            float(self.action_blend_min_alpha), float(self.action_blend_alpha)
+        )
+        return min_alpha + (float(self.action_blend_alpha) - min_alpha) * t
+
+    def reset_diffusion_state(self) -> None:
+        self.obs_deque.clear()
+        self.image_deque.clear()
+        self.model_action_seq = []
+        self.action_seq_timestamp = 0.0
+        self.clear_queue(self.inference_input_queue)
+        self.clear_queue(self.inference_output_queue)
+        self.low_action_start_time = None
+        self.last_model_action = None
+
+    def start_reset_motion(self, obs: Any) -> None:
         if self.reset_time is not None:
             return
-        if self.pose_command is None:
-            self.pose_command = np.asarray(x_obs, dtype=np.float32).copy()
-        self.last_status = self._step_diffusion(obs, x_obs)
+        self.eval_reset_count += 1
+        if self.eval_start_time is not None:
+            self.pending_eval_duration = float(obs.time - self.eval_start_time)
+        self.eval_start_time = None
+        self.reset_start_time = float(obs.time)
+
+        duration = max(2.0, float(self.control_dt))
+        end_time = min(0.5, duration)
+        self.reset_time, self.reset_action = get_action_traj(
+            0.0,
+            np.asarray(obs.motor_pos, dtype=np.float32),
+            np.asarray(self.ref_motor_pos, dtype=np.float32),
+            duration,
+            self.control_dt,
+            end_time=end_time,
+        )
+        self.pending_eval_prompt = True
+        self.reset_diffusion_state()
+
+    def check_action_stall(self, obs: Any, action: npt.NDArray[np.float32]) -> None:
+        if self.reset_time is not None or self.pending_eval_prompt:
+            return
+
+        obs_time = float(obs.time)
+        action_vec = np.asarray(action, dtype=np.float32).reshape(-1)
+        prep_duration = float(getattr(self, "prep_duration", 0.0))
+
+        if self.eval_start_time is None:
+            if self.defer_eval_start:
+                self.eval_start_time = obs_time
+                self.defer_eval_start = False
+            else:
+                if obs_time < prep_duration:
+                    self.low_action_start_time = None
+                    self.last_model_action = action_vec
+                    return
+                self.eval_start_time = obs_time
+
+        if obs_time - self.eval_start_time < self.post_prep_grace_s:
+            self.low_action_start_time = None
+            self.last_model_action = action_vec
+            return
+
+        if obs_time - self.eval_start_time >= self.post_prep_time_out_s:
+            self.start_reset_motion(obs)
+            return
+
+        if self.last_model_action is None:
+            self.last_model_action = action_vec
+            return
+        if self.last_model_action.shape != action_vec.shape:
+            self.last_model_action = action_vec
+            self.low_action_start_time = None
+            return
+
+        compare_len = min(3, action_vec.size, self.last_model_action.size)
+        delta = float(
+            np.max(
+                np.abs(action_vec[:compare_len] - self.last_model_action[:compare_len])
+            )
+        )
+        if delta < self.action_delta_threshold:
+            if self.low_action_start_time is None:
+                self.low_action_start_time = obs_time
+            elif obs_time - self.low_action_start_time >= self.action_stall_duration_s:
+                self.start_reset_motion(obs)
+                return
+        else:
+            self.low_action_start_time = None
+
+        self.last_model_action = action_vec
+
+    def prompt_eval_result(self, duration: Optional[float]) -> None:
+        try:
+            response = input("Is the last eval successful? [y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            response = "n"
+        success = response in ("y", "yes")
+        self.eval_total_count += 1
+        if success:
+            self.eval_success_count += 1
+        duration_value = float(duration) if duration is not None else float("nan")
+        self.eval_durations.append(duration_value)
+        self.eval_success_flags.append(success)
+        self.pending_eval_duration = None
+
+    def save_eval_results(self, exp_folder_path: str) -> None:
+        if self.eval_total_count == 0 or not exp_folder_path:
+            return
+
+        os.makedirs(exp_folder_path, exist_ok=True)
+        success_rate = self.eval_success_count / float(self.eval_total_count)
+        durations = np.asarray(self.eval_durations, dtype=np.float32)
+        valid = durations[~np.isnan(durations)]
+        avg_duration = float(np.mean(valid)) if valid.size else float("nan")
+        median_duration = float(np.median(valid)) if valid.size else float("nan")
+
+        out_path = os.path.join(exp_folder_path, "eval.txt")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(f"success_rate: {success_rate:.3f}\n")
+            f.write(f"success_count: {self.eval_success_count}\n")
+            f.write(f"eval_count: {self.eval_total_count}\n")
+            f.write(f"avg_duration: {avg_duration:.3f}\n")
+            f.write(f"median_duration: {median_duration:.3f}\n")
+            f.write(f"reset_count: {self.eval_reset_count}\n")
+            for idx, (ok, dur) in enumerate(
+                zip(self.eval_success_flags, self.eval_durations, strict=False), start=1
+            ):
+                f.write(f"Trial {idx}: success={ok}, {float(dur):.3f} (duration)\n")
+
+    def append_dp_output_log(self, batch_id: int) -> None:
+        for timestamp, action in self.model_action_seq:
+            if float(timestamp) <= float(self.dp_output_last_time):
+                continue
+            self.dp_output_time_buffer.append(float(timestamp))
+            self.dp_output_buffer.append(
+                np.asarray(action, dtype=np.float32).reshape(-1).copy()
+            )
+            self.dp_output_batch_buffer.append(int(batch_id))
+            self.dp_output_last_time = float(timestamp)
+
+    def save_dp_output_log(self, exp_folder_path: str) -> None:
+        if not exp_folder_path:
+            return
+        times_full = np.asarray(self.dp_output_time_buffer, dtype=np.float64)
+        if times_full.size == 0:
+            return
+        actions_full = np.asarray(list(self.dp_output_buffer), dtype=np.float32)
+        batch_full = np.asarray(self.dp_output_batch_buffer, dtype=np.int64)
+        min_len = min(times_full.size, actions_full.shape[0], batch_full.size)
+        if min_len == 0:
+            return
+
+        log_data = {
+            "time": times_full[-min_len:],
+            "action": actions_full[-min_len:],
+            "batch_id": batch_full[-min_len:],
+            "action_dt": float(self.action_dt),
+            "num_sites": int(self.num_sites),
+        }
+        os.makedirs(exp_folder_path, exist_ok=True)
+        joblib.dump(
+            log_data, os.path.join(exp_folder_path, "dp_output.lz4"), compress="lz4"
+        )
 
     def step(
         self,
         obs: Any,
         sim: Any,
-    ) -> np.ndarray:
-        qpos_obs = np.asarray(obs.qpos, dtype=np.float32)
-        self.controller.sync_qpos(qpos_obs)
-        x_obs = self.controller.get_x_obs()
-        self.update_pose_command_from_obs(obs, x_obs)
-        action = super().step(obs, sim)
+    ) -> npt.NDArray[np.float32]:
+        x_obs = (
+            np.asarray(self.x_obs_log[-1], dtype=np.float32)
+            if len(self.x_obs_log) > 0
+            else None
+        )
+
+        # Keep DP pose-command update local to step(), matching compliance_vlm flow.
+        if self.reset_time is None:
+            if self.pose_command is None:
+                if x_obs is None:
+                    self.pose_command = np.asarray(
+                        self.default_state.x_ref, dtype=np.float32
+                    )
+                else:
+                    self.pose_command = np.asarray(x_obs, dtype=np.float32).copy()
+
+            image = self.get_image_obs()
+            if image is None:
+                self.reset_diffusion_state()
+            else:
+                obs_arr = self.get_obs(obs, x_obs)
+                self.obs_deque.append(obs_arr)
+                self.image_deque.append(image)
+
+                if (
+                    len(self.obs_deque) >= self.obs_deque.maxlen
+                    and len(self.image_deque) >= self.image_deque.maxlen
+                ):
+                    now = float(time.monotonic() - self.trial_start_mono)
+                    self.consume_inference_output(now)
+                    self.submit_inference_request(now)
+
+                    if (
+                        self.model_action_seq
+                        and now - self.action_seq_timestamp > self.action_max_age_s
+                    ):
+                        self.model_action_seq = []
+
+                    if self.model_action_seq:
+                        model_action = self.select_action_for_time(now)
+                        pose_cmd = self.action_to_pose_command(model_action)
+                        if pose_cmd is not None:
+                            self.pose_command = np.asarray(pose_cmd, dtype=np.float32)
+                            # Base CompliancePolicy.step() rewrites pose_command from
+                            # base_pose_command each cycle; keep them in sync so DP
+                            # commands are not overwritten before control update.
+                            self.base_pose_command = np.asarray(
+                                self.pose_command, dtype=np.float32
+                            ).copy()
+                            self.check_action_stall(
+                                obs, np.asarray(model_action, dtype=np.float32)
+                            )
+
+        action = np.asarray(super().step(obs, sim), dtype=np.float32)
+
         if self.reset_time is not None and self.reset_action is not None:
             elapsed = (
                 float(obs.time - self.reset_start_time)
@@ -893,9 +911,10 @@ class ComplianceDPPolicy(CompliancePolicy):
                 else float(obs.time)
             )
             if elapsed < float(self.reset_time[-1]):
-                idx = int(np.searchsorted(self.reset_time, elapsed, side="right") - 1)
-                idx = int(np.clip(idx, 0, self.reset_action.shape[0] - 1))
-                action = np.asarray(self.reset_action[idx], dtype=np.float32)
+                action = np.asarray(
+                    interpolate_action(elapsed, self.reset_time, self.reset_action),
+                    dtype=np.float32,
+                )
             else:
                 action = np.asarray(self.ref_motor_pos, dtype=np.float32).copy()
                 self.reset_time = None
@@ -909,8 +928,19 @@ class ComplianceDPPolicy(CompliancePolicy):
                     self.trial_start_mono = time.monotonic()
                     self.pose_command = None
                     self.reset_diffusion_state()
+
+        if (
+            self.neck_pitch_idx is not None
+            and 0 <= self.neck_pitch_idx < action.shape[0]
+            and self.neck_pitch_idx < self.ref_motor_pos.shape[0]
+        ):
+            action[self.neck_pitch_idx] = np.float32(
+                self.ref_motor_pos[self.neck_pitch_idx]
+            )
+
         if self.record_video:
             self.start_video_logging()
+
         return np.asarray(action, dtype=np.float32)
 
     def close(self, exp_folder_path: str = "") -> None:
@@ -927,29 +957,30 @@ class ComplianceDPPolicy(CompliancePolicy):
                 self.inference_process.join(timeout=1.0)
 
         if hasattr(self, "inference_input_queue"):
-            self._clear_queue(self.inference_input_queue)
+            self.clear_queue(self.inference_input_queue)
             self.inference_input_queue.cancel_join_thread()
             self.inference_input_queue.close()
-
         if hasattr(self, "inference_output_queue"):
-            self._clear_queue(self.inference_output_queue)
+            self.clear_queue(self.inference_output_queue)
             self.inference_output_queue.cancel_join_thread()
             self.inference_output_queue.close()
+
         try:
             self.save_dp_output_log(exp_folder_path)
-        except Exception as exc:
-            print(f"[ComplianceDP] Failed to save DP output log: {exc}")
+        except Exception:
+            pass
         try:
             self.save_eval_results(exp_folder_path)
-        except Exception as exc:
-            print(f"[ComplianceDP] Failed to save eval results: {exc}")
+        except Exception:
+            pass
+
         if exp_folder_path:
             self.export_camera_video(Path(exp_folder_path))
         self.discard_video_recording()
 
-        if self.camera is not None:
+        if self.left_camera is not None:
             try:
-                self.camera.close()
+                self.left_camera.close()
             except Exception:
                 pass
 

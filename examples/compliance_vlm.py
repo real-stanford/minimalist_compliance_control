@@ -37,7 +37,7 @@ class ComplianceVLMPolicy(CompliancePolicy):
         replay: str = "",
         site_names: str = "",
         object: str = "black ink. whiteboard. vase",
-        record_video: bool = True,
+        record_video: bool = False,
         image_height: int = 480,
         image_width: int = 640,
         predictor_model: str = "gemini-2.5-pro",
@@ -98,6 +98,18 @@ class ComplianceVLMPolicy(CompliancePolicy):
                     f"got {cfg_ref_motor_pos.shape[0]}."
                 )
             self.ref_motor_pos = cfg_ref_motor_pos.copy()
+
+        self.neck_pitch_idx: Optional[int] = None
+        if self.robot == "toddlerbot":
+            motor_ordering: List[str] = [
+                str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i))
+                for i in range(int(model.nu))
+            ]
+            self.neck_pitch_idx = (
+                motor_ordering.index("neck_pitch_act")
+                if "neck_pitch_act" in motor_ordering
+                else None
+            )
 
         self.kp_pos_normal = float(self.compliance_cfg.kp_pos_normal)
         self.kp_pos_tangent = float(self.compliance_cfg.kp_pos_tangent)
@@ -757,7 +769,8 @@ class ComplianceVLMPolicy(CompliancePolicy):
         obs: Any,
         sim: Any,
     ) -> npt.NDArray[np.float32]:
-        action = super().step(obs, sim)
+        action = np.asarray(super().step(obs, sim), dtype=np.float32)
+
         self.check_mode_command()
 
         # Let base policy initialize preparation trajectory first.
@@ -767,6 +780,11 @@ class ComplianceVLMPolicy(CompliancePolicy):
         prep_duration = float(getattr(self, "prep_duration", 0.0))
         if float(obs.time) < prep_duration:
             return np.asarray(action, dtype=np.float32)
+
+        if self.neck_pitch_idx is not None:
+            action[self.neck_pitch_idx] = np.float32(
+                self.ref_motor_pos[self.neck_pitch_idx]
+            )
 
         if self.status == "waiting":
             self.wipe_pause_end_time = None

@@ -18,6 +18,7 @@ import gin
 import mujoco
 import numpy as np
 import yaml
+from tqdm import tqdm
 
 from examples.base_sim import Obs
 from examples.sim import MuJoCoSim, build_site_force_applier
@@ -143,6 +144,8 @@ def run_policy(sim: Any, robot: str, policy: Any) -> None:
     control_dt = float(getattr(sim, "control_dt", 0.02))
     next_tick = time.monotonic()
     start_time: float | None = None
+    step_idx = 0
+    p_bar = tqdm(total=float("inf"), desc="Running policy", unit="step")
 
     recorder = ResultRecorder(
         enabled=True,
@@ -165,6 +168,11 @@ def run_policy(sim: Any, robot: str, policy: Any) -> None:
 
             recorder.append(obs=obs, action=action_arr)
 
+            step_idx += 1
+            p_bar_steps = int(1 / policy.control_dt)
+            if step_idx % p_bar_steps == 0:
+                p_bar.update(p_bar_steps)
+
             if bool(getattr(policy, "done", False)):
                 break
 
@@ -182,6 +190,7 @@ def run_policy(sim: Any, robot: str, policy: Any) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        p_bar.close()
         exp_dir = recorder.root_dir or ""
         try:
             try:
