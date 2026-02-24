@@ -251,7 +251,7 @@ class CompliancePolicy:
     def compute_direct_action(self) -> npt.NDArray[np.float32]:
         return np.asarray(self.ref_motor_pos, dtype=np.float32).copy()
 
-    def compute_compliant_action(self, obs: Any) -> npt.NDArray[np.float32]:
+    def _compute_reference_and_log(self, obs: Any) -> ComplianceState:
         qpos = np.asarray(obs.qpos, dtype=np.float32)
         motor_tor = np.asarray(obs.motor_tor, dtype=np.float32)
 
@@ -267,6 +267,8 @@ class CompliancePolicy:
             site: np.asarray(w, dtype=np.float32).copy()
             for site, w in wrenches_by_site.items()
         }
+        if state_ref is None:
+            raise RuntimeError("Controller returned no compliance reference state.")
 
         x_obs = self.controller.get_x_obs()
         self.compliance_time_log.append(float(obs.time))
@@ -280,28 +282,23 @@ class CompliancePolicy:
 
         self.x_ref_log.append(np.asarray(state_ref.x_ref, dtype=np.float32).copy())
         self.x_ik_log.append(np.asarray(state_ref.x_ik, dtype=np.float32).copy())
-        action = np.asarray(state_ref.motor_pos, dtype=np.float32)
 
         if self.plotter is not None:
             self.plotter.update_from_wrench_sim(
                 time_s=float(obs.time),
                 command_pose=np.asarray(self.pose_command, dtype=np.float32),
-                x_ref=(
-                    np.asarray(state_ref.x_ref, dtype=np.float32)
-                    if state_ref is not None
-                    else None
-                ),
-                x_ik=(
-                    np.asarray(state_ref.x_ik, dtype=np.float32)
-                    if state_ref is not None
-                    else None
-                ),
+                x_ref=np.asarray(state_ref.x_ref, dtype=np.float32),
+                x_ik=np.asarray(state_ref.x_ik, dtype=np.float32),
                 wrenches=self.wrenches_by_site,
                 applied_site_forces=self.perturb_site_forces,
                 x_obs=x_obs,
             )
 
-        return action
+        return state_ref
+
+    def compute_compliant_action(self, obs: Any) -> npt.NDArray[np.float32]:
+        state_ref = self._compute_reference_and_log(obs)
+        return np.asarray(state_ref.motor_pos, dtype=np.float32)
 
     def _align_command_to_observation(self, obs: Any) -> None:
         if self._alignment_applied:
@@ -432,8 +429,9 @@ class CompliancePolicy:
                 vis_scale=self.force_vis_scale,
             )
 
+        state_ref = self._compute_reference_and_log(obs)
         if self.use_compliance:
-            action = self.compute_compliant_action(obs)
+            action = np.asarray(state_ref.motor_pos, dtype=np.float32)
         else:
             action = self.compute_direct_action()
 
