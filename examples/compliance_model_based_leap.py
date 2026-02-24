@@ -11,6 +11,7 @@ from scipy.spatial.transform import Slerp
 
 from examples.compliance import CompliancePolicy
 from examples.model_based_shared import (
+    get_ground_truth_wrenches,
     load_merged_motor_config,
     load_motor_params_from_config,
     make_clamped_torque_substep_control,
@@ -22,19 +23,11 @@ from hybrid_servo.tasks.multi_finger_ochs import (
     generate_constraint_jacobian,
     get_center_state,
 )
-from hybrid_servo.utils import find_repo_root, sync_compliance_state_to_current_pose
-from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT
-from minimalist_compliance_control.controller import (
-    ComplianceController,
-    ControllerConfig,
-    RefConfig,
-)
 from minimalist_compliance_control.utils import (
     KeyboardControlReceiver,
     ensure_matrix,
     get_damping_matrix,
 )
-from minimalist_compliance_control.wrench_estimation import WrenchEstimateConfig
 
 PREPARE_POS = [
     0.0,
@@ -142,26 +135,6 @@ TARGET_POSE_DATA: Dict[str, Dict[str, np.ndarray]] = {
     },
 }
 
-###TARGET_POSE_DATA for pen rotating
-# TARGET_POSE_DATA: Dict[str, Dict[str, np.ndarray]] = {
-#     "if_tip": {
-#         "pos": np.array([-0.121, -0.101, 0.14], dtype=np.float32),
-#         "ori": np.array([1.86, -0.0, -2.53], dtype=np.float32),
-#     },
-#     "mf_tip": {
-#         "pos": np.array([-0.121, -0.056, 0.14], dtype=np.float32),
-#         "ori": np.array([1.86, 0.0, -2.53], dtype=np.float32),
-#     },
-#     "rf_tip": {
-#         "pos": np.array([0.042, -0.01, 0.247], dtype=np.float32),
-#         "ori": np.array([-3.14, -0.0, 0.0], dtype=np.float32),
-#     },
-#     "th_tip": {
-#         "pos": np.array([-0.141, -0.077, 0.139], dtype=np.float32),
-#         "ori": np.array([0.08, 1.23, 0.09], dtype=np.float32),
-#     },
-# }
-
 OBJECT_INIT_POS_MAP = {
     "sphere": np.array([-0.125, -0.08, 0.145], dtype=np.float32),
     "box": np.array([-0.125, -0.08, 0.15], dtype=np.float32),
@@ -169,9 +142,6 @@ OBJECT_INIT_POS_MAP = {
 }
 
 OBJECT_TYPE = "cylinder_short"
-# "box"
-# "sphere"
-# "cylinder_short"
 
 
 def _init(
@@ -195,9 +165,22 @@ def _init(
     policy.rot_damping = np.zeros((policy.num_sites, 9), dtype=np.float32)
 
     policy.object_type = OBJECT_TYPE
-    policy.object_type_detected = False
-    policy.object_mass = 0.05
-    policy.object_geom_size = np.array([0.04], dtype=np.float32)  # Default size
+    object_info = OBJECT_MASS_MAP.get(policy.object_type, OBJECT_MASS_MAP["unknown"])
+    policy.object_mass = float(object_info.get("mass", 0.05))
+    policy.object_geom_size = np.asarray(
+        object_info.get("geom_size", np.array([0.04], dtype=np.float32)),
+        dtype=np.float32,
+    )
+    init_pos = object_info.get("init_pos")
+    init_quat = object_info.get("init_quat")
+    policy.object_init_pos = (
+        np.asarray(init_pos, dtype=np.float32).copy() if init_pos is not None else None
+    )
+    policy.object_init_quat = (
+        np.asarray(init_quat, dtype=np.float32).copy()
+        if init_quat is not None
+        else None
+    )
 
     policy.use_compliance = True
     policy.log_ik = True
@@ -302,10 +285,9 @@ def _init(
     policy.translation_linvel_magnitude = 0.03  # ±0.03 m/s for translation mode
 
     # HFVC parameters for different modes
-    default_force = OBJECT_MASS_MAP.get(policy.object_type, OBJECT_MASS_MAP["unknown"])
-    policy.min_normal_force_rotation = float(default_force["min_normal_force_rotation"])
+    policy.min_normal_force_rotation = float(object_info["min_normal_force_rotation"])
     policy.min_normal_force_translation = float(
-        default_force["min_normal_force_translation"]
+        object_info["min_normal_force_translation"]
     )
 
     # Centripetal force: additional force toward object center for each end effector
@@ -341,24 +323,6 @@ def _init(
     except Exception as exc:
         policy.control_receiver = None
         print(f"[LeapRotateCompliance] Warning: control receiver disabled: {exc}")
-
-    # Close-stage thumb debug (disabled by default).
-    policy.debug_close_thumb = False
-    policy.debug_close_thumb_pos_jump_threshold = 0.01
-    policy.debug_close_thumb_rot_jump_threshold = float(np.deg2rad(8.0))
-
-    # Rotate-transition debug (disabled by default).
-    policy.debug_rotate_transition = False
-    policy.debug_rotate_transition_frames = 40
-    policy.debug_rotate_transition_countdown = 0
-    policy._debug_rotate_enter_thumb_cmd_pos = None
-    policy._debug_rotate_enter_thumb_site_pos = None
-    policy._debug_last_thumb_cmd_pos = None
-    policy._debug_last_thumb_site_pos = None
-
-    # Mode-switch debug (disabled by default).
-    policy.debug_mode_switch = False
-    policy.debug_contact_check = True
 
 
 def _build_pose_command(
@@ -542,95 +506,6 @@ def _advance_command_trajectory(policy, time_curr: float) -> None:
         policy.active_traj = None
 
 
-def __active_traj_idx(policy, time_curr: float) -> int:
-    if policy.active_traj is None:
-        return -1
-    times = policy.active_traj["time"]
-    elapsed = time_curr - policy.traj_start_time
-    idx = int(np.searchsorted(times, elapsed, side="right") - 1)
-    return int(np.clip(idx, 0, times.shape[0] - 1))
-
-
-def _rot_error_angle(rotvec_from: np.ndarray, rotvec_to: np.ndarray) -> float:
-    rot_from = R.from_rotvec(np.asarray(rotvec_from, dtype=np.float64).reshape(3))
-    rot_to = R.from_rotvec(np.asarray(rotvec_to, dtype=np.float64).reshape(3))
-    return float(np.linalg.norm((rot_to * rot_from.inv()).as_rotvec()))
-
-
-def __world_vec_to_object_frame(
-    vec_world: np.ndarray, obj_quat_wxyz: np.ndarray
-) -> np.ndarray:
-    obj_rot = R.from_quat(
-        np.asarray(obj_quat_wxyz, dtype=np.float64).reshape(4), scalar_first=True
-    )
-    vec = np.asarray(vec_world, dtype=np.float64).reshape(3)
-    return obj_rot.inv().apply(vec)
-
-
-def __lat_vert_components(vec: np.ndarray) -> tuple[float, float]:
-    vec_arr = np.asarray(vec, dtype=np.float64).reshape(3)
-    return float(np.linalg.norm(vec_arr[:2])), float(vec_arr[2])
-
-
-def _debug_close_thumb(
-    policy,
-    time_curr: float,
-    thumb_cmd_before: np.ndarray,
-    stage_before: str,
-    traj_idx_before: int,
-) -> None:
-    if not getattr(policy, "debug_close_thumb", False):
-        return
-    if "th_tip" not in policy.wrench_site_names:
-        return
-    thumb_idx = policy.wrench_site_names.index("th_tip")
-    thumb_cmd_after = np.asarray(
-        policy.pose_command[thumb_idx], dtype=np.float64
-    ).copy()
-    dpos = float(np.linalg.norm(thumb_cmd_after[:3] - thumb_cmd_before[:3]))
-    drot = _rot_error_angle(thumb_cmd_before[3:6], thumb_cmd_after[3:6])
-    sign_flip = bool(np.dot(thumb_cmd_before[3:6], thumb_cmd_after[3:6]) < 0.0)
-    traj_idx_after = __active_traj_idx(policy, time_curr)
-
-    site_pos_err = float("nan")
-    site_rot_err = float("nan")
-    thumb_site_id = mujoco.mj_name2id(
-        policy.wrench_sim.model, mujoco.mjtObj.mjOBJ_SITE, "th_tip"
-    )
-    if thumb_site_id >= 0:
-        site_pos = np.asarray(
-            policy.wrench_sim.data.site_xpos[thumb_site_id], dtype=np.float64
-        )
-        site_rotvec = R.from_matrix(
-            np.asarray(
-                policy.wrench_sim.data.site_xmat[thumb_site_id], dtype=np.float64
-            ).reshape(3, 3)
-        ).as_rotvec()
-        site_pos_err = float(np.linalg.norm(thumb_cmd_after[:3] - site_pos))
-        site_rot_err = _rot_error_angle(site_rotvec, thumb_cmd_after[3:6])
-
-    reasons: list[str] = []
-    if stage_before != policy.close_stage:
-        reasons.append("stage_change")
-    if (
-        traj_idx_before >= 0
-        and traj_idx_after >= 0
-        and traj_idx_after < traj_idx_before
-    ):
-        reasons.append("traj_restart")
-    if sign_flip:
-        reasons.append("rotvec_sign_flip")
-    if dpos > float(getattr(policy, "debug_close_thumb_pos_jump_threshold", 0.01)):
-        reasons.append("pos_jump")
-    if drot > float(
-        getattr(policy, "debug_close_thumb_rot_jump_threshold", np.deg2rad(8.0))
-    ):
-        reasons.append("ori_jump")
-    reason_text = ",".join(reasons) if reasons else "none"
-
-    return
-
-
 def _check_control_command(policy) -> str | None:
     """Check for keyboard commands via stdin receiver."""
     if policy.control_receiver is None:
@@ -656,8 +531,6 @@ def _update_goal(policy, time_curr: float) -> None:
     - When reaching threshold, sets velocity to 0
     - Pressing 'c' reverses direction to move toward reverse threshold
     """
-    debug_mode_switch = bool(getattr(policy, "debug_mode_switch", False))
-
     # Initialize integration timer on first call during rotate phase
     if policy.last_integration_time is None:
         policy.last_integration_time = time_curr
@@ -665,8 +538,6 @@ def _update_goal(policy, time_curr: float) -> None:
     # Calculate dt for integration
     dt = time_curr - policy.last_integration_time
     policy.last_integration_time = time_curr
-    prev_integrated_angle = float(policy.integrated_angle)
-    prev_integrated_position = float(policy.integrated_position)
 
     # Integrate velocities to track relative position
     if policy.control_mode == "rotation":
@@ -685,33 +556,18 @@ def _update_goal(policy, time_curr: float) -> None:
         reverse_threshold = policy.threshold_position_reverse
 
     # Check for keyboard commands
-    cmd = _check_control_command(
-        policy,
-    )
+    cmd = _check_control_command(policy)
 
     if cmd == "c":
-        _apply_reverse_command(
-            policy,
-        )
+        _apply_reverse_command(policy)
 
     elif cmd == "r":
-        _request_mode_switch(
-            policy,
-        )
+        _request_mode_switch(policy)
 
     if policy.mode_switch_pending:
         at_zero = False
-        direction = 0.0
-        zero_crossed = False
         if policy.control_mode == "rotation":
-            zero_crossed = (
-                prev_integrated_angle * float(policy.integrated_angle) <= 0.0
-                and abs(prev_integrated_angle - float(policy.integrated_angle)) > 0.0
-            )
-            at_zero = (
-                abs(policy.integrated_angle) < policy.return_to_zero_tolerance
-                or zero_crossed
-            )
+            at_zero = abs(policy.integrated_angle) < policy.return_to_zero_tolerance
             if not at_zero:
                 direction = -np.sign(policy.integrated_angle)
                 if direction == 0:
@@ -720,15 +576,7 @@ def _update_goal(policy, time_curr: float) -> None:
                     [0.0, 0.0, direction * policy.rotation_angvel_magnitude]
                 )
         else:
-            zero_crossed = (
-                prev_integrated_position * float(policy.integrated_position) <= 0.0
-                and abs(prev_integrated_position - float(policy.integrated_position))
-                > 0.0
-            )
-            at_zero = (
-                abs(policy.integrated_position) < policy.return_to_zero_tolerance
-                or zero_crossed
-            )
+            at_zero = abs(policy.integrated_position) < policy.return_to_zero_tolerance
             if not at_zero:
                 direction = -np.sign(policy.integrated_position)
                 if direction == 0:
@@ -737,27 +585,6 @@ def _update_goal(policy, time_curr: float) -> None:
                     [direction * policy.translation_linvel_magnitude, 0.0, 0.0]
                 )
 
-        if debug_mode_switch:
-            if policy.control_mode == "rotation":
-                metric = float(policy.integrated_angle)
-                cmd_vel = float(policy.target_rotation_angvel[2])
-            else:
-                metric = float(policy.integrated_position)
-                cmd_vel = float(policy.target_rotation_linvel[0])
-            print(
-                "[leaphand][mode_switch] "
-                f"t={float(time_curr):.3f} "
-                "event=pending_check "
-                f"mode={policy.control_mode} "
-                f"target_mode={policy.target_mode} "
-                f"metric={metric:.6f} "
-                f"tol={float(policy.return_to_zero_tolerance):.6f} "
-                f"cmd_vel={cmd_vel:.6f} "
-                f"direction={float(direction):.1f} "
-                f"zero_crossed={int(zero_crossed)} "
-                f"at_zero={int(at_zero)}"
-            )
-
         if at_zero:
             policy.mode_switch_pending = False
             # Reset pose_command to target pose to avoid drift
@@ -765,11 +592,10 @@ def _update_goal(policy, time_curr: float) -> None:
             print(
                 "[LeapRotateCompliance] Reset pose_command to target_pose_command to prevent drift"
             )
-            policy.integrated_angle = 0.0
-            policy.integrated_position = 0.0
 
             if policy.target_mode == "translation":
                 policy.control_mode = "translation"
+                policy.integrated_position = 0.0
                 policy.target_rotation_angvel = np.array([0.0, 0.0, 0.0])
                 policy.target_rotation_linvel = np.array(
                     [policy.translation_linvel_magnitude, 0.0, 0.0]
@@ -779,6 +605,7 @@ def _update_goal(policy, time_curr: float) -> None:
                 )
             else:
                 policy.control_mode = "rotation"
+                policy.integrated_angle = 0.0
                 policy.target_rotation_linvel = np.array([0.0, 0.0, 0.0])
                 policy.target_rotation_angvel = np.array(
                     [0.0, 0.0, policy.rotation_angvel_magnitude]
@@ -835,18 +662,6 @@ def _update_goal(policy, time_curr: float) -> None:
                 )
                 print(
                     f"[LeapRotateCompliance] Reached threshold: position = {policy.integrated_position:.3f}, stopped"
-                )
-            if debug_mode_switch:
-                print(
-                    "[leaphand][mode_switch] "
-                    f"t={float(time_curr):.3f} "
-                    "event=threshold_stop "
-                    f"mode={policy.control_mode} "
-                    f"metric={float(current_metric):.6f} "
-                    f"active_threshold={float(active_threshold):.6f} "
-                    f"moving_outward={int(moving_outward)} "
-                    f"just_reached_limit={int(just_reached_limit)} "
-                    f"auto_counter={int(policy.auto_switch_counter)}"
                 )
             _auto_switch_target(policy, just_reached_limit)
 
@@ -909,90 +724,26 @@ def _auto_switch_target(policy, just_reached_limit: bool) -> None:
         return
 
     action_type = policy.auto_switch_counter % 2  # 0=reverse, 1=mode_switch
-    if bool(getattr(policy, "debug_mode_switch", False)):
-        action_name = "reverse" if action_type == 0 else "mode_switch"
-        print(
-            "[leaphand][mode_switch] "
-            f"t={float(policy.wrench_sim.data.time):.3f} "
-            "event=auto_switch "
-            f"action={action_name} "
-            f"counter={int(policy.auto_switch_counter)}"
-        )
     if action_type == 0:
-        _apply_reverse_command(
-            policy,
-        )
+        _apply_reverse_command(policy)
     else:
-        _request_mode_switch(
-            policy,
-        )
+        _request_mode_switch(policy)
     policy.auto_switch_counter += 1
-
-
-def __ensure_object_detected(policy) -> None:
-    if policy.object_type_detected:
-        return
-    policy.object_type = OBJECT_TYPE
-    object_info = OBJECT_MASS_MAP.get(policy.object_type, OBJECT_MASS_MAP["unknown"])
-    policy.object_mass = float(object_info.get("mass", 0.05))
-    policy.object_init_pos = object_info.get("init_pos")
-    policy.object_init_quat = object_info.get("init_quat")
-    policy.object_geom_size = object_info.get("geom_size")
-    policy.min_normal_force_rotation = float(
-        object_info.get(
-            "min_normal_force_rotation",
-            policy.min_normal_force_rotation,
-        )
-    )
-    policy.min_normal_force_translation = float(
-        object_info.get(
-            "min_normal_force_translation",
-            policy.min_normal_force_translation,
-        )
-    )
-    if policy.object_init_pos is not None:
-        policy.object_init_pos = policy.object_init_pos.copy()
-    if policy.object_init_quat is not None:
-        policy.object_init_quat = policy.object_init_quat.copy()
-    policy.object_type_detected = True
-    print(
-        f"[LeapRotateCompliance] Detected object type: {policy.object_type}, mass: {policy.object_mass}kg"
-    )
-
-
-def _forward_object_to_init(policy, sim_name: str = "sim") -> None:
-    """Immediately place object at policy init pose and forward once."""
-    __ensure_object_detected(
-        policy,
-    )
-    _capture_object_init(
-        policy,
-    )
-    _fix_object(policy, policy.wrench_sim, sim_name=sim_name)
-    mujoco.mj_forward(policy.wrench_sim.model, policy.wrench_sim.data)
 
 
 def _step(
     policy,
     time_curr: float,
     wrenches_by_site: Optional[Dict[str, np.ndarray]] = None,
-    system_state: Optional[Dict[str, np.ndarray]] = None,
     *,
     sim_name: str = "sim",
     is_real_world: bool = False,
-) -> Dict[str, np.ndarray | str]:
-    thumb_cmd_before: Optional[np.ndarray] = None
-    stage_before = str(policy.close_stage)
-    traj_idx_before = -1
+) -> None:
     if wrenches_by_site is not None:
         policy.wrenches_by_site = {
             key: np.asarray(val, dtype=np.float32)
             for key, val in wrenches_by_site.items()
         }
-
-    __ensure_object_detected(
-        policy,
-    )
 
     if time_curr < policy.prep_duration:
         _capture_object_init(
@@ -1000,17 +751,9 @@ def _step(
         )
         if not is_real_world:
             _fix_object(policy, policy.wrench_sim, sim_name=sim_name)
-        return _get_outputs(
-            policy,
-        )
+        return
 
     if policy.phase == "close":
-        if "th_tip" in policy.wrench_site_names:
-            thumb_idx = policy.wrench_site_names.index("th_tip")
-            thumb_cmd_before = np.asarray(
-                policy.pose_command[thumb_idx], dtype=np.float64
-            ).copy()
-            traj_idx_before = __active_traj_idx(policy, time_curr)
         _capture_object_init(
             policy,
         )
@@ -1038,7 +781,7 @@ def _step(
         _update_goal(policy, time_curr)
 
         # Handle rotation action
-        _handle_rotate_action(policy, system_state)
+        _handle_rotate_action(policy)
         _check_switch_phase(policy)
 
     if (
@@ -1049,30 +792,7 @@ def _step(
         policy.close_stage = "to_target"
         policy.traj_set = False
 
-    if thumb_cmd_before is not None:
-        _debug_close_thumb(
-            policy,
-            time_curr,
-            thumb_cmd_before,
-            stage_before,
-            traj_idx_before,
-        )
-    return _get_outputs(
-        policy,
-    )
-
-
-def _get_outputs(policy) -> Dict[str, np.ndarray | str]:
-    return {
-        "phase": policy.phase,
-        "control_mode": policy.control_mode,
-        "pose_command": policy.pose_command.copy(),
-        "wrench_command": policy.wrench_command.copy(),
-        "pos_stiffness": policy.pos_stiffness.copy(),
-        "rot_stiffness": policy.rot_stiffness.copy(),
-        "pos_damping": policy.pos_damping.copy(),
-        "rot_damping": policy.rot_damping.copy(),
-    }
+    return
 
 
 def _assign_stiffness(
@@ -1136,74 +856,10 @@ def _set_phase(policy, phase: str) -> None:
 def _check_switch_phase(policy) -> None:
     """Switch from close to rotate once all fingertips have sufficient contact force."""
     if policy.phase == "close":
-        has_contact = _check_all_fingertips_contact(
-            policy,
-        )
+        has_contact = _check_all_fingertips_contact(policy)
         if has_contact:
-            _freeze_pose_to_current(
-                policy,
-            )
-            _capture_baseline_tip_rot(
-                policy,
-            )
-            if getattr(policy, "debug_rotate_transition", False):
-                policy.debug_rotate_transition_countdown = int(
-                    getattr(policy, "debug_rotate_transition_frames", 40)
-                )
-                enter_state = _get_system_state(policy)
-                obj_pos = np.asarray(enter_state["sliding_cube_pos"], dtype=np.float64)
-                obj_quat = np.asarray(
-                    enter_state["sliding_cube_quat"], dtype=np.float64
-                )
-                if "th_tip" in policy.wrench_site_names:
-                    thumb_idx = policy.wrench_site_names.index("th_tip")
-                    thumb_cmd = np.asarray(
-                        policy.pose_command[thumb_idx], dtype=np.float64
-                    )
-                    policy._debug_rotate_enter_thumb_cmd_pos = thumb_cmd[:3].copy()
-                    policy._debug_last_thumb_cmd_pos = thumb_cmd[:3].copy()
-                    policy._debug_rotate_enter_thumb_site_pos = None
-                    policy._debug_last_thumb_site_pos = None
-                    thumb_site_id = mujoco.mj_name2id(
-                        policy.wrench_sim.model, mujoco.mjtObj.mjOBJ_SITE, "th_tip"
-                    )
-                    if thumb_site_id >= 0:
-                        thumb_site_pos = np.asarray(
-                            policy.wrench_sim.data.site_xpos[thumb_site_id],
-                            dtype=np.float64,
-                        )
-                        thumb_site_rot = R.from_matrix(
-                            np.asarray(
-                                policy.wrench_sim.data.site_xmat[thumb_site_id],
-                                dtype=np.float64,
-                            ).reshape(3, 3)
-                        ).as_rotvec()
-                        pos_err = float(np.linalg.norm(thumb_cmd[:3] - thumb_site_pos))
-                        rot_err = _rot_error_angle(thumb_site_rot, thumb_cmd[3:6])
-                        policy._debug_rotate_enter_thumb_site_pos = (
-                            thumb_site_pos.copy()
-                        )
-                        policy._debug_last_thumb_site_pos = thumb_site_pos.copy()
-                        thumb_cmd_rel_obj = __world_vec_to_object_frame(
-                            thumb_cmd[:3] - obj_pos, obj_quat
-                        )
-                        thumb_site_rel_obj = __world_vec_to_object_frame(
-                            thumb_site_pos - obj_pos, obj_quat
-                        )
-                        cmd_lat, cmd_vert = __lat_vert_components(thumb_cmd_rel_obj)
-                        site_lat, site_vert = __lat_vert_components(thumb_site_rel_obj)
-                        _ = (
-                            obj_pos,
-                            obj_quat,
-                            thumb_cmd_rel_obj,
-                            thumb_site_rel_obj,
-                            cmd_lat,
-                            cmd_vert,
-                            site_lat,
-                            site_vert,
-                            pos_err,
-                            rot_err,
-                        )
+            _freeze_pose_to_current(policy)
+            _capture_baseline_tip_rot(policy)
             _set_phase(policy, "rotate")
     else:
         return
@@ -1211,40 +867,17 @@ def _check_switch_phase(policy) -> None:
 
 def _check_all_fingertips_contact(policy) -> bool:
     """Check if index or middle fingertip has contact based on external wrench."""
+    if not hasattr(policy, "wrenches_by_site") or not policy.wrenches_by_site:
+        return False
 
-    def _extract_force(wrench: Optional[np.ndarray]) -> tuple[np.ndarray, float]:
+    for tip in ("if_tip", "mf_tip"):
+        wrench = policy.wrenches_by_site.get(tip)
         if wrench is None:
-            return np.zeros(3, dtype=np.float32), 0.0
-        wrench_arr = np.asarray(wrench, dtype=np.float32).reshape(-1)
-        if wrench_arr.shape[0] < 3:
-            return np.zeros(3, dtype=np.float32), 0.0
-        force = wrench_arr[:3].astype(np.float32, copy=True)
-        return force, float(np.linalg.norm(force))
-
-    has_wrench = hasattr(policy, "wrenches_by_site") and bool(policy.wrenches_by_site)
-    if_wrench = policy.wrenches_by_site.get("if_tip") if has_wrench else None
-    mf_wrench = policy.wrenches_by_site.get("mf_tip") if has_wrench else None
-
-    if_force, if_norm = _extract_force(if_wrench)
-    mf_force, mf_norm = _extract_force(mf_wrench)
-    threshold = float(getattr(policy, "contact_force_threshold", 0.0))
-    has_contact = bool(if_norm >= threshold or mf_norm >= threshold)
-
-    if bool(getattr(policy, "debug_contact_check", False)):
-        phase = str(getattr(policy, "phase", "unknown"))
-        sim_time = float(getattr(policy.wrench_sim.data, "time", 0.0))
-        print(
-            "[leaphand][contact_check] "
-            f"t={sim_time:.3f} phase={phase} "
-            f"if_ext_force={[round(float(x), 6) for x in if_force.tolist()]} "
-            f"|if|={if_norm:.6f} "
-            f"mf_ext_force={[round(float(x), 6) for x in mf_force.tolist()]} "
-            f"|mf|={mf_norm:.6f} "
-            f"threshold={threshold:.6f} "
-            f"has_contact={int(has_contact)}"
-        )
-
-    return has_contact
+            continue
+        force_magnitude = np.linalg.norm(wrench[:3])
+        if force_magnitude >= policy.contact_force_threshold:
+            return True
+    return False
 
 
 def _capture_baseline_tip_rot(policy) -> None:
@@ -1326,11 +959,6 @@ def _fix_object(policy, sim: Any, sim_name: str = "sim") -> None:
         sim.data.qvel[qvel_slice] = 0.0
 
 
-def _apply_pd(policy, sim: Any) -> None:
-    # Kept for API parity with toddlerbot policy; no-op in standalone mode.
-    return
-
-
 def _get_system_state(policy) -> Dict[str, np.ndarray]:
     """Return object and fingertip state using site positions.
 
@@ -1355,16 +983,8 @@ def _get_system_state(policy) -> Dict[str, np.ndarray]:
         quat = get_sensor_data(f"{tip_name}_framequat")
         linvel = get_sensor_data(f"{tip_name}_framelinvel")
         angvel = get_sensor_data(f"{tip_name}_frameangvel")
-        if pos is None:
-            pos = np.zeros(3, dtype=np.float32)
-        if quat is None:
-            quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        if linvel is None:
-            linvel = np.zeros(3, dtype=np.float32)
-        if angvel is None:
-            angvel = np.zeros(3, dtype=np.float32)
         return {
-            "pos": np.asarray(pos, dtype=np.float32),
+            "pos": pos.astype(np.float32, copy=False),
             "quat": np.asarray(quat, dtype=np.float32),
             "linvel": np.asarray(linvel, dtype=np.float32),
             "angvel": np.asarray(angvel, dtype=np.float32),
@@ -1417,10 +1037,6 @@ def _get_system_state(policy) -> Dict[str, np.ndarray]:
     obj_linvel = np.zeros(3, dtype=np.float32)
     obj_angvel = np.zeros(3, dtype=np.float32)
 
-    # print(
-    #     f"[Expected] pos=[{obj_pos[0]:+.3f}, {obj_pos[1]:+.3f}, {obj_pos[2]:+.3f}] m, rotvec: f{R.from_quat(obj_quat, scalar_first=True).as_rotvec()}, integrated_pos={policy.integrated_position:+.3f}, integrated_angle={policy.integrated_angle:+.3f}"
-    # )
-
     return {
         "sliding_cube_pos": obj_pos,
         "sliding_cube_quat": obj_quat,
@@ -1449,46 +1065,28 @@ def _get_system_state(policy) -> Dict[str, np.ndarray]:
 
 def _get_target_vel(policy, state):
     p_thumb_obj = state["fix_traj_pos"] - state["sliding_cube_pos"]
-    cross_term = np.cross(policy.target_rotation_angvel, p_thumb_obj)
-    thumb_linvel = policy.target_rotation_linvel + cross_term
+    thumb_linvel = policy.target_rotation_linvel + np.cross(
+        policy.target_rotation_angvel, p_thumb_obj
+    )
     thumb_angvel = np.zeros(3)
 
     v_obj_goal = np.cross(policy.target_rotation_angvel - thumb_angvel, -p_thumb_obj)
     omega_obj_goal = policy.target_rotation_angvel - thumb_angvel
 
-    return (
-        v_obj_goal,
-        omega_obj_goal,
-        thumb_linvel,
-        thumb_angvel,
-        p_thumb_obj,
-        cross_term,
+    return v_obj_goal, omega_obj_goal, thumb_linvel, thumb_angvel
+
+
+def _handle_rotate_action(policy):
+    state = _get_system_state(policy)
+    target_linvel, target_angvel, thumb_linvel, thumb_angvel = _get_target_vel(
+        policy, state
     )
-
-
-def _handle_rotate_action(policy, state: Optional[Dict[str, np.ndarray]] = None):
-    if state is None:
-        state = _get_system_state(
-            policy,
-        )
-    (
-        target_linvel,
-        target_angvel,
-        thumb_linvel,
-        thumb_angvel,
-        p_thumb_obj,
-        cross_term,
-    ) = _get_target_vel(policy, state)
-
-    if getattr(policy, "debug_rotate_transition_countdown", 0) > 0:
-        pass
 
     min_force = (
         policy.min_normal_force_rotation
         if policy.control_mode == "rotation"
         else policy.min_normal_force_translation
     )
-    # print(target_linvel, target_angvel)
     hfvc_inputs = compute_hfvc_inputs(
         state,
         goal_velocity=target_linvel.reshape(-1, 1),
@@ -1503,38 +1101,7 @@ def _handle_rotate_action(policy, state: Optional[Dict[str, np.ndarray]] = None)
     hfvc_solution = solve_ochs(*hfvc_inputs, kNumSeeds=1, kPrintLevel=0)
     if hfvc_solution is None:
         return
-
-    # Stash per-frame target decomposition for downstream debug in distribute step.
-    policy._debug_target_linvel = np.asarray(target_linvel, dtype=np.float64).copy()
-    policy._debug_target_angvel = np.asarray(target_angvel, dtype=np.float64).copy()
-    policy._debug_thumb_linvel = np.asarray(thumb_linvel, dtype=np.float64).copy()
-    policy._debug_thumb_angvel = np.asarray(thumb_angvel, dtype=np.float64).copy()
-    policy._debug_p_thumb_obj = np.asarray(p_thumb_obj, dtype=np.float64).copy()
-    policy._debug_cross_term = np.asarray(cross_term, dtype=np.float64).copy()
     _distribute_action(policy, hfvc_solution, thumb_linvel, thumb_angvel, state)
-
-
-def _ensure_rotvec_continuity(
-    policy, old_rotvec: np.ndarray, new_rotvec: np.ndarray
-) -> np.ndarray:
-    """Ensure rotvec sign consistency to avoid jumps at pi boundary.
-
-    When a rotation vector crosses the pi boundary, scipy can flip its sign
-    (since rotvec and -rotvec represent rotations differing by 2*pi).
-    This function ensures the new rotvec maintains the same sign as the old one.
-
-    Args:
-        old_rotvec: Previous rotation vector (3,)
-        new_rotvec: New rotation vector that might have flipped sign (3,)
-
-    Returns:
-        Corrected rotation vector with consistent sign
-    """
-    # Check if the dot product is negative (opposite directions)
-    if np.dot(old_rotvec, new_rotvec) < 0:
-        # Flip the sign to maintain continuity
-        return -new_rotvec
-    return new_rotvec
 
 
 def _distribute_action(
@@ -1543,7 +1110,6 @@ def _distribute_action(
     """Distribute HFVC center commands to index/middle fingertips."""
     # Convert HFVC (center) wrench/velocity to contact-level targets.
     global_vel, global_frc = transform_hfvc_to_global(hfvc_solution)
-    # print(f"global_vel:{global_vel.ravel()}, global_force:{global_frc.ravel()}")
 
     p_H, _, _, _ = get_center_state(state)
     p_fix = state["fix_traj_pos"].reshape(3)
@@ -1633,9 +1199,6 @@ def _distribute_action(
         policy.wrench_command[tip_idx, 3:] = 0.0
     if "th_tip" in policy.wrench_site_names:
         thumb_idx = policy.wrench_site_names.index("th_tip")
-        thumb_pose_before = np.asarray(
-            policy.pose_command[thumb_idx], dtype=np.float64
-        ).copy()
         policy.wrench_command[thumb_idx, :3] = np.array(
             [-float(global_frc[0]), 0.0, 0.0], dtype=np.float32
         )
@@ -1656,8 +1219,6 @@ def _distribute_action(
         curr_rot = R.from_rotvec(old_rotvec)
         new_rot = if_mf_rot_increment * curr_rot
         new_rotvec = new_rot.as_rotvec().astype(np.float32)
-        # Ensure sign continuity to avoid jumps
-        # new_rotvec = _ensure_rotvec_continuity(policy, old_rotvec, new_rotvec)
         policy.pose_command[tip_idx, 3:6] = new_rotvec
 
     # set the thumb linvel and angvel
@@ -1669,340 +1230,9 @@ def _distribute_action(
     old_rotvec_thumb = policy.pose_command[thumb_idx, 3:6].copy()
     curr_rot = R.from_rotvec(old_rotvec_thumb)
     rot_increment = R.from_rotvec(policy.target_rotation_angvel * dt)
-    # print(policy.target_rotation_angvel)
     new_rot = rot_increment * curr_rot
     new_rotvec_thumb = new_rot.as_rotvec().astype(np.float32)
-    # Ensure sign continuity to avoid jumps
-    # new_rotvec_thumb = _ensure_rotvec_continuity(
-    #     policy,
-    #     old_rotvec_thumb,
-    #     new_rotvec_thumb,
-    # )
-    # print(new_rotvec_thumb)
-
-    # integrated_angle = R.from_rotvec(policy.integrated_angle_thumb)
-    # policy.integrated_angle_thumb = (rot_increment * integrated_angle).as_rotvec()
-    # print(policy.integrated_angle_thumb)
     policy.pose_command[thumb_idx, 3:6] = new_rotvec_thumb
-
-    if getattr(policy, "debug_rotate_transition_countdown", 0) > 0:
-        thumb_pose_after = np.asarray(
-            policy.pose_command[thumb_idx], dtype=np.float64
-        ).copy()
-        thumb_pos_delta = thumb_pose_after[:3] - thumb_pose_before[:3]
-        obj_pos = np.asarray(state["sliding_cube_pos"], dtype=np.float64)
-        obj_quat = np.asarray(state["sliding_cube_quat"], dtype=np.float64)
-        thumb_pos_delta_obj = __world_vec_to_object_frame(thumb_pos_delta, obj_quat)
-        thumb_delta_lat, thumb_delta_vert = __lat_vert_components(thumb_pos_delta_obj)
-
-        thumb_linvel_dbg = np.asarray(
-            getattr(policy, "_debug_thumb_linvel", thumb_linvel), dtype=np.float64
-        )
-        thumb_linvel_obj = __world_vec_to_object_frame(thumb_linvel_dbg, obj_quat)
-        thumb_vel_lat, thumb_vel_vert = __lat_vert_components(thumb_linvel_obj)
-
-        prev_cmd_pos = getattr(policy, "_debug_last_thumb_cmd_pos", None)
-        cmd_step_delta = (
-            thumb_pose_after[:3] - np.asarray(prev_cmd_pos, dtype=np.float64)
-            if prev_cmd_pos is not None
-            else np.zeros(3, dtype=np.float64)
-        )
-        cmd_step_delta_obj = __world_vec_to_object_frame(cmd_step_delta, obj_quat)
-        policy._debug_last_thumb_cmd_pos = thumb_pose_after[:3].copy()
-
-        thumb_site_id = mujoco.mj_name2id(
-            policy.wrench_sim.model, mujoco.mjtObj.mjOBJ_SITE, "th_tip"
-        )
-        site_step_delta = np.zeros(3, dtype=np.float64)
-        site_step_delta_obj = np.zeros(3, dtype=np.float64)
-        site_step_lat = 0.0
-        site_step_vert = 0.0
-        if thumb_site_id >= 0:
-            thumb_site_pos = np.asarray(
-                policy.wrench_sim.data.site_xpos[thumb_site_id], dtype=np.float64
-            )
-            prev_site_pos = getattr(policy, "_debug_last_thumb_site_pos", None)
-            if prev_site_pos is not None:
-                site_step_delta = thumb_site_pos - np.asarray(
-                    prev_site_pos, dtype=np.float64
-                )
-                site_step_delta_obj = __world_vec_to_object_frame(
-                    site_step_delta, obj_quat
-                )
-                site_step_lat, site_step_vert = __lat_vert_components(
-                    site_step_delta_obj
-                )
-            policy._debug_last_thumb_site_pos = thumb_site_pos.copy()
-
-        cmd_cum_delta = np.zeros(3, dtype=np.float64)
-        cmd_cum_delta_obj = np.zeros(3, dtype=np.float64)
-        cmd_cum_lat = 0.0
-        cmd_cum_vert = 0.0
-        enter_cmd_pos = getattr(policy, "_debug_rotate_enter_thumb_cmd_pos", None)
-        if enter_cmd_pos is not None:
-            cmd_cum_delta = thumb_pose_after[:3] - np.asarray(
-                enter_cmd_pos, dtype=np.float64
-            )
-            cmd_cum_delta_obj = __world_vec_to_object_frame(cmd_cum_delta, obj_quat)
-            cmd_cum_lat, cmd_cum_vert = __lat_vert_components(cmd_cum_delta_obj)
-
-        site_cum_delta = np.zeros(3, dtype=np.float64)
-        site_cum_delta_obj = np.zeros(3, dtype=np.float64)
-        site_cum_lat = 0.0
-        site_cum_vert = 0.0
-        enter_site_pos = getattr(policy, "_debug_rotate_enter_thumb_site_pos", None)
-        if thumb_site_id >= 0 and enter_site_pos is not None:
-            thumb_site_pos = np.asarray(
-                policy.wrench_sim.data.site_xpos[thumb_site_id], dtype=np.float64
-            )
-            site_cum_delta = thumb_site_pos - np.asarray(
-                enter_site_pos, dtype=np.float64
-            )
-            site_cum_delta_obj = __world_vec_to_object_frame(site_cum_delta, obj_quat)
-            site_cum_lat, site_cum_vert = __lat_vert_components(site_cum_delta_obj)
-
-        _ = (
-            v_center,
-            omega,
-            v_left,
-            v_right,
-            obj_pos,
-            obj_quat,
-            thumb_linvel_dbg,
-            thumb_linvel_obj,
-            thumb_vel_lat,
-            thumb_vel_vert,
-            thumb_pos_delta,
-            thumb_pos_delta_obj,
-            thumb_delta_lat,
-            thumb_delta_vert,
-            cmd_step_delta,
-            cmd_step_delta_obj,
-            site_step_delta,
-            site_step_delta_obj,
-            site_step_lat,
-            site_step_vert,
-            cmd_cum_delta,
-            cmd_cum_delta_obj,
-            cmd_cum_lat,
-            cmd_cum_vert,
-            site_cum_delta,
-            site_cum_delta_obj,
-            site_cum_lat,
-            site_cum_vert,
-        )
-        policy.debug_rotate_transition_countdown = (
-            int(policy.debug_rotate_transition_countdown) - 1
-        )
-
-
-def forward_object_to_init(policy: Any, sim_name: str = "sim") -> None:
-    _forward_object_to_init(policy, sim_name=sim_name)
-
-
-def capture_object_init(policy: Any) -> None:
-    _capture_object_init(policy)
-
-
-def fix_object(policy: Any, sim: Any, sim_name: str = "sim") -> None:
-    _fix_object(policy, sim=sim, sim_name=sim_name)
-
-
-def step_policy(
-    policy: Any,
-    time_curr: float,
-    wrenches_by_site: Optional[Dict[str, np.ndarray]] = None,
-    system_state: Optional[Dict[str, np.ndarray]] = None,
-    sim_name: str = "sim",
-    is_real_world: bool = False,
-) -> Dict[str, np.ndarray | str]:
-    return _step(
-        policy,
-        time_curr=time_curr,
-        wrenches_by_site=wrenches_by_site,
-        system_state=system_state,
-        sim_name=sim_name,
-        is_real_world=is_real_world,
-    )
-    # print(self.pose_command[thumb_idx, 0:3])
-
-
-def _load_motor_params(
-    repo_root: str,
-    robot_desc_dir: str,
-    model: mujoco.MjModel,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    float,
-]:
-    default_path = os.path.join(repo_root, "descriptions", "default.yml")
-    robot_path = os.path.join(robot_desc_dir, "robot.yml")
-    motors_path = os.path.join(robot_desc_dir, "motors.yml")
-    config = load_merged_motor_config(
-        default_path=default_path,
-        robot_path=robot_path,
-        motors_path=motors_path,
-    )
-    return load_motor_params_from_config(
-        model=model,
-        config=config,
-        allow_act_suffix=True,
-        dtype=np.float32,
-    )
-
-
-def _build_controller(scene_xml_path: str, control_dt: float) -> ComplianceController:
-    scene_xml_path = os.path.abspath(scene_xml_path)
-    scene_dir = os.path.dirname(scene_xml_path)
-    fixed_model_xml = os.path.join(scene_dir, "left_hand_fixed.xml")
-
-    site_names = ("if_tip", "mf_tip", "rf_tip", "th_tip")
-    index_map = {
-        "if_tip": np.array([0, 1, 2, 3], dtype=np.int32),
-        "mf_tip": np.array([4, 5, 6, 7], dtype=np.int32),
-        "rf_tip": np.array([8, 9, 10, 11], dtype=np.int32),
-        "th_tip": np.array([12, 13, 14, 15], dtype=np.int32),
-    }
-
-    model_for_names = mujoco.MjModel.from_xml_path(scene_xml_path)
-    actuator_names: list[str] = []
-    joint_names: list[str] = []
-    for i in range(int(model_for_names.nu)):
-        actuator_name = mujoco.mj_id2name(
-            model_for_names, mujoco.mjtObj.mjOBJ_ACTUATOR, i
-        )
-        actuator_names.append(str(actuator_name) if actuator_name is not None else "")
-        joint_id = int(model_for_names.actuator_trnid[i, 0])
-        joint_name = (
-            mujoco.mj_id2name(model_for_names, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
-            if joint_id >= 0
-            else None
-        )
-        joint_names.append(str(joint_name) if joint_name is not None else "")
-    motor_names_by_site = {
-        site: tuple(actuator_names[idx] for idx in indices)
-        for site, indices in index_map.items()
-    }
-    joint_names_by_site = {
-        site: tuple(joint_names[idx] for idx in indices)
-        for site, indices in index_map.items()
-    }
-
-    controller_cfg = ControllerConfig(
-        xml_path=scene_xml_path,
-        site_names=site_names,
-        fixed_base=True,
-        base_body_name="",
-        joint_names_by_site=joint_names_by_site,
-        motor_names_by_site=motor_names_by_site,
-        gear_ratios_by_site={
-            "if_tip": np.ones(4, dtype=np.float32),
-            "mf_tip": np.ones(4, dtype=np.float32),
-            "rf_tip": np.ones(4, dtype=np.float32),
-            "th_tip": np.ones(4, dtype=np.float32),
-        },
-    )
-
-    estimate_cfg = WrenchEstimateConfig(
-        force_reg=1e-3,
-        torque_reg=1e-2,
-        force_only=False,
-        axis_aligned=False,
-        normal_axis="+z",
-    )
-
-    actuator_count = int(model_for_names.nu)
-    ref_cfg = RefConfig(
-        dt=float(control_dt),
-        fixed_model_xml_path=fixed_model_xml,
-        mass=1.0,
-        inertia_diag=(1.0, 1.0, 1.0),
-        joint_to_actuator_scale=tuple([1.0] * actuator_count),
-        joint_to_actuator_bias=tuple([0.0] * actuator_count),
-    )
-
-    return ComplianceController(
-        config=controller_cfg,
-        estimate_config=estimate_cfg,
-        ref_config=ref_cfg,
-    )
-
-
-def _build_command_matrix(
-    site_names: tuple[str, ...],
-    policy_out: Dict[str, np.ndarray | str],
-    measured_wrenches: Dict[str, np.ndarray],
-) -> np.ndarray:
-    pose_command = np.asarray(policy_out["pose_command"], dtype=np.float32)
-    wrench_command = np.asarray(policy_out["wrench_command"], dtype=np.float32)
-    pos_stiffness = np.asarray(policy_out["pos_stiffness"], dtype=np.float32)
-    rot_stiffness = np.asarray(policy_out["rot_stiffness"], dtype=np.float32)
-    pos_damping = np.asarray(policy_out["pos_damping"], dtype=np.float32)
-    rot_damping = np.asarray(policy_out["rot_damping"], dtype=np.float32)
-
-    num_sites = len(site_names)
-    if pose_command.shape[0] != num_sites:
-        raise ValueError(
-            f"pose_command rows ({pose_command.shape[0]}) != num_sites ({num_sites})"
-        )
-
-    command_matrix = np.zeros((num_sites, COMMAND_LAYOUT.width), dtype=np.float32)
-    command_matrix[:, COMMAND_LAYOUT.position] = pose_command[:, :3]
-    command_matrix[:, COMMAND_LAYOUT.orientation] = pose_command[:, 3:6]
-    command_matrix[:, COMMAND_LAYOUT.kp_pos] = pos_stiffness
-    command_matrix[:, COMMAND_LAYOUT.kp_rot] = rot_stiffness
-    command_matrix[:, COMMAND_LAYOUT.kd_pos] = pos_damping
-    command_matrix[:, COMMAND_LAYOUT.kd_rot] = rot_damping
-    command_matrix[:, COMMAND_LAYOUT.force] = wrench_command[:, :3]
-    command_matrix[:, COMMAND_LAYOUT.torque] = wrench_command[:, 3:]
-
-    for idx, site_name in enumerate(site_names):
-        wrench = measured_wrenches.get(site_name)
-        if wrench is None:
-            continue
-        wrench = np.asarray(wrench, dtype=np.float32).reshape(-1)
-        if wrench.shape[0] < 6:
-            continue
-        command_matrix[idx, COMMAND_LAYOUT.measured_force] = wrench[:3]
-        command_matrix[idx, COMMAND_LAYOUT.measured_torque] = wrench[3:6]
-
-    return command_matrix
-
-
-def _get_ground_truth_wrenches(
-    model: mujoco.MjModel,
-    data: mujoco.MjData,
-    site_names: tuple[str, ...],
-) -> Dict[str, np.ndarray]:
-    """Use body-level cfrc_ext and convert to [force, torque] convention.
-
-    MuJoCo cfrc_ext is stored as a 6D spatial vector in
-    [rotation(3), translation(3)] order. The policy/controller command layout
-    expects [force(3), torque(3)], so we reorder here.
-    """
-    mujoco.mj_rnePostConstraint(model, data)
-    wrenches: Dict[str, np.ndarray] = {}
-    for site_name in site_names:
-        site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
-        if site_id < 0:
-            continue
-        body_id = int(model.site_bodyid[site_id])
-        raw_spatial = np.asarray(data.cfrc_ext[body_id], dtype=np.float32).reshape(-1)
-        if raw_spatial.shape[0] >= 6:
-            # cfrc_ext: [torque(3), force(3)] -> [force(3), torque(3)]
-            wrenches[site_name] = np.concatenate(
-                [raw_spatial[3:6], raw_spatial[0:3]], axis=0
-            ).astype(np.float32, copy=False)
-        else:
-            wrenches[site_name] = np.zeros(6, dtype=np.float32)
-    return wrenches
 
 
 class LeapModelBasedPolicy(CompliancePolicy):
@@ -2016,19 +1246,20 @@ class LeapModelBasedPolicy(CompliancePolicy):
         status_interval: float = 1.0,
         vis: bool = True,
     ) -> None:
+        del duration, status_interval
         self.vis = bool(vis)
-        self.duration = float(duration)
-        self.repo_root = find_repo_root(os.path.abspath(os.path.dirname(__file__)))
-
-        if scene_xml:
-            scene_xml_path = os.path.abspath(scene_xml)
-        else:
-            scene_xml_path = os.path.join(
-                self.repo_root, "descriptions", "leap_hand", "scene_object_fixed.xml"
-            )
-        self.scene_xml_path = scene_xml_path
-
-        self.controller = _build_controller(scene_xml_path, float(control_dt))
+        super().__init__(
+            name="compliance_model_based",
+            robot="leap",
+            init_motor_pos=np.asarray(PREPARE_POS, dtype=np.float32),
+            config_name="leap_model_based.gin",
+            controller_xml_path=(str(scene_xml).strip() or None),
+            controller_dt=float(control_dt),
+            show_help=False,
+            start_keyboard_listener=False,
+            enable_plotter=False,
+            enable_force_perturbation=False,
+        )
         if self.controller.compliance_ref is None:
             raise RuntimeError("Controller compliance_ref is not initialized.")
         # For LEAP scene XML, the first free joint belongs to manip_object.
@@ -2038,6 +1269,12 @@ class LeapModelBasedPolicy(CompliancePolicy):
         self.controller.compliance_ref._last_base_quat = np.array(
             [1.0, 0.0, 0.0, 0.0], dtype=np.float32
         )
+        controller_xml_path = str(self.controller.config.xml_path)
+        if not os.path.isabs(controller_xml_path):
+            controller_xml_path = os.path.abspath(
+                os.path.join(self.repo_root, controller_xml_path)
+            )
+        self.scene_xml_path = controller_xml_path
         self.site_names = tuple(self.controller.config.site_names)
         self.thumb_site_id = (
             int(
@@ -2055,18 +1292,6 @@ class LeapModelBasedPolicy(CompliancePolicy):
         mujoco.mj_forward(
             self.controller.wrench_sim.model, self.controller.wrench_sim.data
         )
-        super().__init__(
-            name="compliance_model_based",
-            robot="leap",
-            init_motor_pos=np.asarray(
-                self.controller.compliance_ref.default_motor_pos, dtype=np.float32
-            ),
-            controller=self.controller,
-            show_help=False,
-            start_keyboard_listener=False,
-            enable_plotter=False,
-            enable_force_perturbation=False,
-        )
         _init(
             self,
             wrench_sim=self.controller.wrench_sim,
@@ -2075,15 +1300,16 @@ class LeapModelBasedPolicy(CompliancePolicy):
             prep_duration=max(float(prep_duration), 0.0),
             auto_switch_target_enabled=True,
         )
-        forward_object_to_init(self, sim_name="sim")
+        _capture_object_init(self)
+        _fix_object(self, self.controller.wrench_sim, sim_name="sim")
+        mujoco.mj_forward(
+            self.controller.wrench_sim.model, self.controller.wrench_sim.data
+        )
 
         self.motor_cmd = np.asarray(
             self.controller.compliance_ref.default_motor_pos, dtype=np.float32
         )
         self.measured_wrenches: dict[str, np.ndarray] = {}
-        self.wrench_filter_alpha = 0.9
-        self.measure_wrench_use_ema = False
-        self.measure_wrench_force_only = True
         self.control_dt = float(self.controller.ref_config.dt)
 
         trnid = np.asarray(
@@ -2102,7 +1328,12 @@ class LeapModelBasedPolicy(CompliancePolicy):
         prep_hold_duration = min(5.0, self.prep_duration)
         self.prep_ramp_duration = max(self.prep_duration - prep_hold_duration, 1e-6)
 
-        robot_desc_dir = os.path.dirname(scene_xml_path)
+        robot_desc_dir = os.path.dirname(self.scene_xml_path)
+        motor_cfg = load_merged_motor_config(
+            default_path=os.path.join(self.repo_root, "descriptions", "default.yml"),
+            robot_path=os.path.join(robot_desc_dir, "robot.yml"),
+            motors_path=os.path.join(robot_desc_dir, "motors.yml"),
+        )
         (
             kp,
             kd,
@@ -2113,15 +1344,18 @@ class LeapModelBasedPolicy(CompliancePolicy):
             tau_brake_max,
             kd_min,
             passive_active_ratio,
-        ) = _load_motor_params(
-            self.repo_root, robot_desc_dir, self.controller.wrench_sim.model
+        ) = load_motor_params_from_config(
+            model=self.controller.wrench_sim.model,
+            config=motor_cfg,
+            allow_act_suffix=True,
+            dtype=np.float32,
         )
 
         def _extra_substep(_data: mujoco.MjData) -> None:
             sim_time_local = float(_data.time)
             if sim_time_local < self.prep_duration or self.phase == "close":
-                capture_object_init(self)
-                fix_object(self, self.controller.wrench_sim, sim_name="sim")
+                _capture_object_init(self)
+                _fix_object(self, self.controller.wrench_sim, sim_name="sim")
                 mujoco.mj_forward(
                     self.controller.wrench_sim.model, self.controller.wrench_sim.data
                 )
@@ -2141,53 +1375,10 @@ class LeapModelBasedPolicy(CompliancePolicy):
             passive_active_ratio=float(passive_active_ratio),
             extra_substep_fn=_extra_substep,
         )
-
-        self.status_interval = max(float(status_interval), 1e-3)
-        self.next_status_time = 0.0
-        self.debug_close_pose_trace = False
-        self.debug_close_pose_trace_every_step = False
         self.done = False
-        self._compliance_state_synced = False
 
-    def _get_current_motor_pos(self) -> np.ndarray:
-        qpos = np.asarray(self.controller.wrench_sim.data.qpos, dtype=np.float32)
-        qpos_idx = np.asarray(self.qpos_adr, dtype=np.int32).reshape(-1)
-        if qpos_idx.size == 0:
-            return np.asarray(self.motor_cmd, dtype=np.float32).copy()
-        if np.any(qpos_idx < 0) or np.any(qpos_idx >= qpos.shape[0]):
-            return np.asarray(self.motor_cmd, dtype=np.float32).copy()
-        return qpos[qpos_idx].astype(np.float32, copy=True)
-
-    def _update_measured_wrenches(self) -> None:
-        raw_wrenches = _get_ground_truth_wrenches(
-            self.controller.wrench_sim.model,
-            self.controller.wrench_sim.data,
-            self.site_names,
-        )
-        alpha = float(np.clip(self.wrench_filter_alpha, 0.0, 1.0))
-        measured: dict[str, np.ndarray] = {}
-        for site_name in self.site_names:
-            current = np.asarray(
-                raw_wrenches.get(site_name, np.zeros(6, dtype=np.float32)),
-                dtype=np.float32,
-            ).copy()
-            if bool(self.measure_wrench_force_only):
-                current[3:] = 0.0
-
-            if bool(self.measure_wrench_use_ema):
-                prev = self.measured_wrenches.get(site_name)
-                if prev is None:
-                    value = current
-                else:
-                    value = alpha * current + (1.0 - alpha) * np.asarray(
-                        prev, dtype=np.float32
-                    )
-            else:
-                value = current
-            measured[site_name] = np.asarray(value, dtype=np.float32)
-        self.measured_wrenches = measured
-
-    def _sync_sim_state_from_obs(self, obs: Any) -> None:
+    def step(self, obs: Any, sim: Any) -> np.ndarray:
+        sim_time = float(obs.time)
         has_update = False
         if obs.qpos is not None:
             qpos_arr = np.asarray(obs.qpos, dtype=np.float32).reshape(-1)
@@ -2203,38 +1394,20 @@ class LeapModelBasedPolicy(CompliancePolicy):
             mujoco.mj_forward(
                 self.controller.wrench_sim.model, self.controller.wrench_sim.data
             )
-
-    def _print_thumb_xref_and_real(self, sim_time: float) -> None:
-        del sim_time
-        return
-
-    def _print_close_all_fingers_xref_cmd_real(
-        self, sim_time: float, state_ref: Optional[Any] = None
-    ) -> None:
-        del sim_time, state_ref
-        return
-
-    def step(self, obs: Any, sim: Any) -> np.ndarray:
-        sim_time = float(obs.time)
-        if self.duration > 0.0 and sim_time >= self.duration:
-            print("[leaphand] Reached duration limit, exiting.")
-            self.done = True
-            return self.motor_cmd.copy()
-
-        state_ref: Optional[Any] = None
-        self._sync_sim_state_from_obs(obs)
-        self._update_measured_wrenches()
-        # Keep the object suspended in the environment sim during prep/close so the
-        # hand can approach and grasp before free interaction starts.
-        if (
-            hasattr(sim, "model")
-            and hasattr(sim, "data")
-            and (sim_time < self.prep_duration or str(self.phase) == "close")
-        ):
-            capture_object_init(self)
-            fix_object(self, sim, sim_name="sim")
+        raw_wrenches = get_ground_truth_wrenches(
+            self.controller.wrench_sim.model, self.controller.wrench_sim.data, self.site_names
+        )
+        self.measured_wrenches = {
+            site_name: np.asarray(
+                raw_wrenches.get(site_name, np.zeros(6, dtype=np.float32)),
+                dtype=np.float32,
+            ).copy()
+            for site_name in self.site_names
+        }
+        if sim_time < self.prep_duration or str(self.phase) == "close":
+            _capture_object_init(self)
+            _fix_object(self, sim, sim_name="sim")
             mujoco.mj_forward(sim.model, sim.data)
-
         if sim_time < self.prep_duration:
             _step(
                 self,
@@ -2254,16 +1427,6 @@ class LeapModelBasedPolicy(CompliancePolicy):
             else:
                 self.motor_cmd = self.prep_target_motor_pos.copy()
         else:
-            if not self._compliance_state_synced:
-                current_motor_pos = self._get_current_motor_pos()
-                sync_compliance_state_to_current_pose(
-                    self.controller, self.controller.wrench_sim.data, current_motor_pos
-                )
-                self._compliance_state_synced = True
-                print(
-                    "[leaphand] Synced compliance state to current pose at model-based start."
-                )
-            phase_before = str(self.phase)
             _step(
                 self,
                 time_curr=sim_time,
@@ -2271,47 +1434,25 @@ class LeapModelBasedPolicy(CompliancePolicy):
                 sim_name="sim",
                 is_real_world=False,
             )
-            phase_after = str(self.phase)
-            if phase_before != phase_after and phase_after == "rotate":
-                current_motor_pos = self._get_current_motor_pos()
-                sync_compliance_state_to_current_pose(
-                    self.controller, self.controller.wrench_sim.data, current_motor_pos
-                )
-                _step(
-                    self,
-                    time_curr=sim_time,
-                    wrenches_by_site=self.measured_wrenches,
-                    sim_name="sim",
-                    is_real_world=False,
-                )
             command_matrix = self.build_command_matrix(
                 pose_command=np.asarray(self.pose_command, dtype=np.float32),
                 wrench_command=np.asarray(self.wrench_command, dtype=np.float32),
                 measured_wrenches=self.measured_wrenches,
             )
-            qpos_obs = (
-                np.asarray(obs.qpos, dtype=np.float32)
-                if obs.qpos is not None
-                else np.asarray(self.controller.wrench_sim.data.qpos, dtype=np.float32)
-            )
-            motor_tor_obs = np.asarray(obs.motor_tor, dtype=np.float32)
             next_motor_cmd, state_ref = self.apply_controller_step(
                 command_matrix=command_matrix,
                 target_motor_pos=self.motor_cmd,
-                motor_torques=motor_tor_obs,
-                qpos=qpos_obs,
+                motor_torques=np.asarray(obs.motor_tor, dtype=np.float32),
+                qpos=(
+                    np.asarray(obs.qpos, dtype=np.float32)
+                    if obs.qpos is not None
+                    else np.asarray(self.controller.wrench_sim.data.qpos, dtype=np.float32)
+                ),
                 controlled_actuators_only=False,
             )
             self.motor_cmd = np.asarray(next_motor_cmd, dtype=np.float32)
             if state_ref is not None:
                 self._last_state = state_ref
-
-        if sim_time >= self.next_status_time:
-            print(
-                f"[leaphand] t={sim_time:.2f}s phase={self.phase} mode={self.control_mode}"
-            )
-            self.next_status_time = sim_time + self.status_interval
-
         return self.motor_cmd.copy()
 
     def close(self, exp_folder_path: str = "") -> None:

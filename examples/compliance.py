@@ -56,6 +56,8 @@ class CompliancePolicy:
         robot: str,
         init_motor_pos: npt.ArrayLike,
         config_name: Optional[str] = None,
+        controller_xml_path: Optional[str] = None,
+        controller_dt: Optional[float] = None,
         show_help: bool = True,
         controller: Optional[ComplianceController] = None,
         start_keyboard_listener: bool = True,
@@ -86,6 +88,19 @@ class CompliancePolicy:
             )
             gin.bind_parameter("WrenchSimConfig.view", False)
             gin.bind_parameter("WrenchSimConfig.render", False)
+            if controller_xml_path is not None and str(controller_xml_path).strip():
+                xml_path = str(controller_xml_path).strip()
+                if not os.path.isabs(xml_path):
+                    xml_path = os.path.abspath(os.path.join(self.repo_root, xml_path))
+                gin.bind_parameter("WrenchSimConfig.xml_path", xml_path)
+                gin.bind_parameter("ControllerConfig.xml_path", xml_path)
+                fixed_model_xml = os.path.join(
+                    os.path.dirname(xml_path), "left_hand_fixed.xml"
+                )
+                if os.path.exists(fixed_model_xml):
+                    gin.bind_parameter("RefConfig.fixed_model_xml_path", fixed_model_xml)
+            if controller_dt is not None:
+                gin.bind_parameter("RefConfig.dt", float(controller_dt))
 
             controller_cfg = ControllerConfig()
             self.controller = ComplianceController(
