@@ -11,10 +11,11 @@ import datetime as dt
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any, Optional, Sequence
 
 import gin
+import joblib
 import mujoco
 import numpy as np
 import yaml
@@ -94,6 +95,16 @@ def _build_sim(
             merged_config=merged_config,
         )
     else:
+        if str(args.robot).strip().lower() == "g1":
+            from examples.real_world_g1 import RealWorldG1
+
+            return RealWorldG1(
+                robot=str(args.robot),
+                control_dt=control_dt,
+                xml_path=str(xml_path),
+                merged_config=merged_config,
+                net_if=str(getattr(args, "ip", "")),
+            )
         from examples.real_world import RealWorld
 
         return RealWorld(
@@ -105,11 +116,19 @@ def _build_sim(
 
 
 class ResultRecorder:
-    def __init__(self, *, enabled: bool, robot: str, policy: str, sim: str) -> None:
+    def __init__(
+        self, *, enabled: bool, robot: str, policy: str, sim: str, sim_obj: Any
+    ) -> None:
         self.enabled = bool(enabled)
         self.num_steps = 0
         self.root_dir: str | None = None
         self._metadata = {"robot": robot, "policy": policy, "sim": sim}
+        self._sim_obj = sim_obj
+        self._obs_field_names = [f.name for f in fields(Obs)]
+        self.time_list: list[float] = []
+        self.action_list: list[np.ndarray] = []
+        self.obs_series: dict[str, list[np.ndarray]] = {}
+        self.motor_names: list[str] = []
         if self.enabled:
             stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
             self.root_dir = os.path.join(
@@ -118,11 +137,64 @@ class ResultRecorder:
             os.makedirs(self.root_dir, exist_ok=True)
             print(f"[run_policy] dump path: {self.root_dir}")
 
+    def _infer_motor_names(self, width: int) -> None:
+        if width <= 0 or self.motor_names:
+            return
+        if hasattr(self._sim_obj, "motor_ordering"):
+            names = [str(name) for name in getattr(self._sim_obj, "motor_ordering")]
+            if len(names) == width:
+                self.motor_names = names
+                return
+        if hasattr(self._sim_obj, "model"):
+            model = getattr(self._sim_obj, "model")
+            if hasattr(model, "nu") and int(getattr(model, "nu")) == width:
+                names = []
+                for i in range(width):
+                    name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+                    names.append(str(name) if name is not None else f"motor_{i:02d}")
+                self.motor_names = names
+                return
+        self.motor_names = [f"motor_{i:02d}" for i in range(width)]
+
+    @staticmethod
+    def _stack_or_object(seq: list[np.ndarray]) -> np.ndarray:
+        if not seq:
+            return np.zeros((0,), dtype=np.float32)
+        try:
+            return np.stack(seq).astype(np.float32)
+        except ValueError:
+            return np.asarray(seq, dtype=object)
+
     def append(self, *, obs: Obs, action: np.ndarray) -> None:
-        del obs, action
         if not self.enabled:
             return
         self.num_steps += 1
+        self.time_list.append(float(obs.time))
+        action_arr = np.asarray(action, dtype=np.float32).reshape(-1).copy()
+        self.action_list.append(action_arr)
+        self._infer_motor_names(action_arr.shape[0])
+
+        for key in self._obs_field_names:
+            if key == "time":
+                continue
+            value = getattr(obs, key, None)
+            if value is None:
+                continue
+            if key == "rot":
+                if hasattr(value, "as_euler"):
+                    self.obs_series.setdefault("rot_euler", []).append(
+                        np.asarray(
+                            value.as_euler("xyz", degrees=False), dtype=np.float32
+                        )
+                    )
+                continue
+            try:
+                arr = np.asarray(value, dtype=np.float32).reshape(-1).copy()
+            except (TypeError, ValueError):
+                continue
+            self.obs_series.setdefault(key, []).append(arr)
+            if key == "motor_pos":
+                self._infer_motor_names(arr.shape[0])
 
     def close(self) -> None:
         if not self.enabled or self.root_dir is None:
@@ -139,6 +211,26 @@ class ResultRecorder:
             )
         print(f"[run_policy] meta written: {meta_path}")
 
+        action_arr = (
+            np.stack(self.action_list).astype(np.float32)
+            if self.action_list
+            else np.zeros((0, 0), dtype=np.float32)
+        )
+        obs_payload = {
+            key: self._stack_or_object(series)
+            for key, series in self.obs_series.items()
+            if len(series) > 0
+        }
+        payload: dict[str, Any] = {
+            "time": np.asarray(self.time_list, dtype=np.float64),
+            "action": action_arr,
+            "obs": obs_payload,
+            "motor_names": list(self.motor_names),
+        }
+        log_path = os.path.join(self.root_dir, "log_data.lz4")
+        joblib.dump(payload, log_path, compress="lz4")
+        print(f"[run_policy] log written: {log_path}")
+
 
 def run_policy(sim: Any, robot: str, policy: Any) -> None:
     control_dt = float(getattr(sim, "control_dt", 0.02))
@@ -152,6 +244,7 @@ def run_policy(sim: Any, robot: str, policy: Any) -> None:
         robot=str(robot),
         policy=str(getattr(policy, "name", type(policy).__name__)),
         sim=str(getattr(sim, "name", "unknown")),
+        sim_obj=sim,
     )
 
     try:
@@ -338,7 +431,11 @@ def main(args: Sequence[str] | None = None) -> None:
             site_ids=np.asarray(policy.force_site_ids, dtype=np.int32),
         )
 
-    run_policy(sim=sim, robot=str(parsed.robot), policy=policy)
+    run_policy(
+        sim=sim,
+        robot=str(parsed.robot),
+        policy=policy
+    )
 
 
 if __name__ == "__main__":
