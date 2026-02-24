@@ -9,10 +9,14 @@ import joblib
 import mujoco
 import numpy as np
 import numpy.typing as npt
-import yaml
 from scipy.spatial.transform import Rotation as R
 
 from examples.compliance import CompliancePolicy
+from examples.model_based_shared import (
+    load_merged_motor_config,
+    load_motor_params_from_config,
+    make_clamped_torque_substep_control,
+)
 from hybrid_servo.algorithm.ochs import solve_ochs
 from hybrid_servo.algorithm.solvehfvc import HFVC, transform_hfvc_to_global
 from hybrid_servo.tasks.bimanual_ochs import (
@@ -420,15 +424,6 @@ def _build_contact_state(
     return state
 
 
-def _deep_update(dst: dict, src: dict) -> dict:
-    for key, value in src.items():
-        if isinstance(value, dict) and isinstance(dst.get(key), dict):
-            _deep_update(dst[key], value)
-        else:
-            dst[key] = value
-    return dst
-
-
 def _load_robot_motor_config() -> dict:
     repo_root = find_repo_root(os.path.abspath(os.path.dirname(__file__)))
     default_path = os.path.join(repo_root, "descriptions", "default.yml")
@@ -438,61 +433,16 @@ def _load_robot_motor_config() -> dict:
         "toddlerbot_2xm",
         "robot.yml",
     )
-
-    with open(default_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    with open(robot_path, "r", encoding="utf-8") as f:
-        robot_cfg = yaml.safe_load(f)
-    if robot_cfg is not None:
-        _deep_update(config, robot_cfg)
-    return config
+    return load_merged_motor_config(default_path=default_path, robot_path=robot_path)
 
 
 def _load_motor_params(model: mujoco.MjModel) -> tuple[ArrayF64, ...]:
     config = _load_robot_motor_config()
-
-    kp_ratio = float(config["actuators"]["kp_ratio"])
-    kd_ratio = float(config["actuators"]["kd_ratio"])
-    passive_active_ratio = float(config["actuators"]["passive_active_ratio"])
-
-    names = [
-        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
-        for i in range(model.nu)
-    ]
-    kp = []
-    kd = []
-    tau_max = []
-    q_dot_max = []
-    tau_q_dot_max = []
-    q_dot_tau_max = []
-    tau_brake_max = []
-    kd_min = []
-
-    for name in names:
-        if name not in config["motors"]:
-            raise ValueError(f"Missing motor config for actuator '{name}'")
-        motor_cfg = config["motors"][name]
-        motor_type = motor_cfg["motor"]
-        act_cfg = config["actuators"][motor_type]
-        kp.append(float(motor_cfg["kp"]) / kp_ratio)
-        kd.append(float(motor_cfg["kd"]) / kd_ratio)
-        tau_max.append(float(act_cfg["tau_max"]))
-        q_dot_max.append(float(act_cfg["q_dot_max"]))
-        tau_q_dot_max.append(float(act_cfg["tau_q_dot_max"]))
-        q_dot_tau_max.append(float(act_cfg["q_dot_tau_max"]))
-        tau_brake_max.append(float(act_cfg["tau_brake_max"]))
-        kd_min.append(float(act_cfg["kd_min"]))
-
-    return (
-        np.asarray(kp, dtype=np.float64),
-        np.asarray(kd, dtype=np.float64),
-        np.asarray(tau_max, dtype=np.float64),
-        np.asarray(q_dot_max, dtype=np.float64),
-        np.asarray(tau_q_dot_max, dtype=np.float64),
-        np.asarray(q_dot_tau_max, dtype=np.float64),
-        np.asarray(tau_brake_max, dtype=np.float64),
-        np.asarray(kd_min, dtype=np.float64),
-        np.asarray(passive_active_ratio, dtype=np.float64),
+    return load_motor_params_from_config(
+        model=model,
+        config=config,
+        allow_act_suffix=False,
+        dtype=np.float64,
     )
 
 
@@ -1092,45 +1042,8 @@ def _maybe_print_ochs_world_velocity(
     t: float,
     distributed_motion: Dict[str, ArrayF64],
 ) -> None:
-    if not cfg.print_ochs_world_velocity:
-        return
-
-    last_t = runtime.last_ochs_print_time
-    interval = max(float(cfg.ochs_print_interval), 0.0)
-    if last_t is not None and (float(t) - float(last_t)) < interval:
-        return
-
-    runtime.last_ochs_print_time = float(t)
-
-    center_linvel = np.asarray(
-        distributed_motion["center_linvel"], dtype=np.float64
-    ).reshape(3)
-    center_angvel = np.asarray(
-        distributed_motion["center_angvel"], dtype=np.float64
-    ).reshape(3)
-    left_linvel = np.asarray(
-        distributed_motion["left_linvel"], dtype=np.float64
-    ).reshape(3)
-    left_angvel = np.asarray(
-        distributed_motion["left_angvel"], dtype=np.float64
-    ).reshape(3)
-    right_linvel = np.asarray(
-        distributed_motion["right_linvel"], dtype=np.float64
-    ).reshape(3)
-    right_angvel = np.asarray(
-        distributed_motion["right_angvel"], dtype=np.float64
-    ).reshape(3)
-
-    print(
-        "[model_based][OCHS->world] "
-        f"t={float(t):.3f} "
-        f"center_linvel={center_linvel.tolist()} "
-        f"center_angvel={center_angvel.tolist()} "
-        f"left_linvel={left_linvel.tolist()} "
-        f"left_angvel={left_angvel.tolist()} "
-        f"right_linvel={right_linvel.tolist()} "
-        f"right_angvel={right_angvel.tolist()}"
-    )
+    del runtime, cfg, t, distributed_motion
+    return
 
 
 def _assign_stiffness(
@@ -1286,44 +1199,6 @@ def _build_command_matrix(
     return command_matrix
 
 
-def _run_compliance_step(
-    controller: ComplianceController,
-    data: mujoco.MjData,
-    t: float,
-    command_matrix: ArrayF64,
-    target_motor_pos: ArrayF64,
-    measured_wrenches: Dict[str, ArrayF64],
-    site_names: Tuple[str, str],
-    motor_torques: Optional[ArrayF64] = None,
-) -> tuple[ArrayF64, Optional[ComplianceState]]:
-    del t
-    if motor_torques is None:
-        motor_torques_arr = np.asarray(data.actuator_force, dtype=np.float32)
-    else:
-        motor_torques_arr = np.asarray(motor_torques, dtype=np.float32)
-    wrenches_out, state_ref = controller.step(
-        command_matrix=command_matrix.astype(np.float32),
-        motor_torques=motor_torques_arr,
-        qpos=np.asarray(data.qpos, dtype=np.float32),
-    )
-
-    next_target = target_motor_pos
-    if state_ref is not None:
-        state_ref_motor_pos = np.asarray(state_ref.motor_pos, dtype=np.float64)
-        next_target = np.asarray(target_motor_pos, dtype=np.float64).copy()
-        controlled_actuators = np.asarray(
-            controller.compliance_ref.actuator_indices, dtype=np.int32
-        )
-        next_target[controlled_actuators] = state_ref_motor_pos[controlled_actuators]
-
-    for site in site_names:
-        wrench = wrenches_out.get(site)
-        if wrench is not None:
-            measured_wrenches[site] = np.asarray(wrench, dtype=np.float64)
-
-    return next_target, state_ref
-
-
 def _resolve_mocap_target_ids(
     model: mujoco.MjModel,
 ) -> tuple[Optional[int], Optional[int]]:
@@ -1426,6 +1301,19 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
         mujoco.mj_forward(
             self.controller.wrench_sim.model, self.controller.wrench_sim.data
         )
+        super().__init__(
+            name="compliance_model_based",
+            robot="toddlerbot",
+            init_motor_pos=np.asarray(
+                self.controller.compliance_ref.get_default_state().motor_pos,
+                dtype=np.float32,
+            ),
+            controller=self.controller,
+            show_help=False,
+            start_keyboard_listener=False,
+            enable_plotter=False,
+            enable_force_perturbation=False,
+        )
 
         self.site_names = tuple(self.controller.config.site_names)
         if self.site_names != ("left_hand_center", "right_hand_center"):
@@ -1447,7 +1335,7 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
             self.controller.wrench_sim.model.jnt_dofadr[trnid], dtype=np.int32
         )
 
-        default_state = self.controller.compliance_ref.get_default_state()
+        default_state = self.default_state
         kneel_action_arr, kneel_qpos, kneel_qpos_source_dim = _load_kneel_trajectory(
             example_dir=repo_root,
             cfg=self.cfg,
@@ -1521,7 +1409,7 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
             self.controller.wrench_sim.model
         )
 
-        substep_control = self._make_clamped_torque_substep_control(
+        substep_control = make_clamped_torque_substep_control(
             qpos_adr=self.qpos_adr,
             qvel_adr=self.qvel_adr,
             target_motor_pos_getter=lambda: self.motor_cmd,
@@ -1552,68 +1440,6 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
             self.default_ball_pos = np.array([0.24, -0.0, 0.08], dtype=np.float64)
         self.ball_pos_estimate_log: list[np.ndarray] = []
         self.done = False
-
-    @staticmethod
-    def _make_clamped_torque_substep_control(
-        *,
-        qpos_adr: np.ndarray,
-        qvel_adr: np.ndarray,
-        target_motor_pos_getter,
-        kp: np.ndarray,
-        kd: np.ndarray,
-        tau_max: np.ndarray,
-        q_dot_max: np.ndarray,
-        tau_q_dot_max: np.ndarray,
-        q_dot_tau_max: np.ndarray,
-        tau_brake_max: np.ndarray,
-        kd_min: np.ndarray,
-        passive_active_ratio: float,
-        extra_substep_fn=None,
-    ):
-        qpos_adr = np.asarray(qpos_adr, dtype=np.int32)
-        qvel_adr = np.asarray(qvel_adr, dtype=np.int32)
-        kp = np.asarray(kp, dtype=np.float64)
-        kd = np.asarray(kd, dtype=np.float64)
-        tau_max = np.asarray(tau_max, dtype=np.float64)
-        q_dot_max = np.asarray(q_dot_max, dtype=np.float64)
-        tau_q_dot_max = np.asarray(tau_q_dot_max, dtype=np.float64)
-        q_dot_tau_max = np.asarray(q_dot_tau_max, dtype=np.float64)
-        tau_brake_max = np.asarray(tau_brake_max, dtype=np.float64)
-        kd_min = np.asarray(kd_min, dtype=np.float64)
-        passive_active_ratio = float(passive_active_ratio)
-
-        def _substep(data_step: mujoco.MjData) -> None:
-            target_motor_pos = np.asarray(target_motor_pos_getter(), dtype=np.float64)
-            q = np.asarray(data_step.qpos[qpos_adr], dtype=np.float64)
-            q_dot = np.asarray(data_step.qvel[qvel_adr], dtype=np.float64)
-            q_dot_dot = np.asarray(data_step.qacc[qvel_adr], dtype=np.float64)
-            error = target_motor_pos - q
-
-            real_kp = np.where(q_dot_dot * error < 0.0, kp * passive_active_ratio, kp)
-            tau_m = real_kp * error - (kd_min + kd) * q_dot
-
-            abs_q_dot = np.abs(q_dot)
-            slope = (tau_q_dot_max - tau_max) / (q_dot_max - q_dot_tau_max)
-            taper_limit = tau_max + slope * (abs_q_dot - q_dot_tau_max)
-            tau_acc_limit = np.where(abs_q_dot <= q_dot_tau_max, tau_max, taper_limit)
-            tau_m_clamped = np.where(
-                np.logical_and(abs_q_dot > q_dot_max, q_dot * target_motor_pos > 0),
-                np.where(
-                    q_dot > 0,
-                    np.ones_like(tau_m) * -tau_brake_max,
-                    np.ones_like(tau_m) * tau_brake_max,
-                ),
-                np.where(
-                    q_dot > 0,
-                    np.clip(tau_m, -tau_brake_max, tau_acc_limit),
-                    np.clip(tau_m, -tau_acc_limit, tau_brake_max),
-                ),
-            )
-            data_step.ctrl[:] = tau_m_clamped.astype(np.float32)
-            if extra_substep_fn is not None:
-                extra_substep_fn(data_step)
-
-        return _substep
 
     def update_ball_pose_estimate(
         self, obs: Any, sim: Any, is_real: bool
@@ -1726,16 +1552,16 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
             command_matrix = _build_command_matrix(
                 self.runtime, self.measured_wrenches, self.site_names
             )
-            self.motor_cmd, state_ref = _run_compliance_step(
-                self.controller,
-                self.controller.wrench_sim.data,
-                t,
-                command_matrix,
-                self.motor_cmd,
-                self.measured_wrenches,
-                self.site_names,
+            next_motor_cmd, state_ref = self.apply_controller_step(
+                command_matrix=command_matrix.astype(np.float32),
+                target_motor_pos=np.asarray(self.motor_cmd, dtype=np.float32),
+                measured_wrenches=self.measured_wrenches,
+                site_names=self.site_names,
                 motor_torques=obs.motor_tor,
+                qpos=np.asarray(self.controller.wrench_sim.data.qpos, dtype=np.float32),
+                controlled_actuators_only=True,
             )
+            self.motor_cmd = np.asarray(next_motor_cmd, dtype=np.float64)
             if state_ref is not None:
                 self.latest_state_ref = state_ref
             if reached:
@@ -1789,16 +1615,6 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
                     total_angular_velocity_dir = (
                         total_angular_velocity_vec / total_angular_velocity_mag
                     )
-                print(
-                    "[model_based][goal_velocity] "
-                    f"t={float(t):.3f} "
-                    f"base={float(self.runtime.goal_angular_velocity):.6f} "
-                    f"delta={np.asarray(self.runtime.delta_goal_angular_velocity, dtype=np.float64).tolist()} "
-                    f"total_vec={total_angular_velocity_vec.tolist()} "
-                    f"total_mag={total_angular_velocity_mag:.6f} "
-                    f"goal_angle={float(self.runtime.goal_angle):.6f}rad "
-                    f"({np.degrees(float(self.runtime.goal_angle)):.2f}deg)"
-                )
                 min_hand_force = (
                     self.cfg.min_hand_normal_force_both
                     if self.runtime.active_hands_mode == "both"
@@ -1840,16 +1656,18 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
                 command_matrix = _build_command_matrix(
                     self.runtime, self.measured_wrenches, self.site_names
                 )
-                self.motor_cmd, state_ref = _run_compliance_step(
-                    self.controller,
-                    self.controller.wrench_sim.data,
-                    t,
-                    command_matrix,
-                    self.motor_cmd,
-                    self.measured_wrenches,
-                    self.site_names,
+                next_motor_cmd, state_ref = self.apply_controller_step(
+                    command_matrix=command_matrix.astype(np.float32),
+                    target_motor_pos=np.asarray(self.motor_cmd, dtype=np.float32),
+                    measured_wrenches=self.measured_wrenches,
+                    site_names=self.site_names,
                     motor_torques=obs.motor_tor,
+                    qpos=np.asarray(
+                        self.controller.wrench_sim.data.qpos, dtype=np.float32
+                    ),
+                    controlled_actuators_only=True,
                 )
+                self.motor_cmd = np.asarray(next_motor_cmd, dtype=np.float64)
                 if state_ref is not None:
                     self.latest_state_ref = state_ref
         else:
@@ -1871,8 +1689,9 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
 
         return np.asarray(self.motor_cmd, dtype=np.float32).copy()
 
-    def close(self) -> None:
+    def close(self, exp_folder_path: str = "") -> None:
         if self.control_receiver is not None and hasattr(
             self.control_receiver, "close"
         ):
             self.control_receiver.close()
+        super().close(exp_folder_path=exp_folder_path)

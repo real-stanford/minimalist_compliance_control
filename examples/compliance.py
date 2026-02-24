@@ -57,39 +57,47 @@ class CompliancePolicy:
         init_motor_pos: npt.ArrayLike,
         config_name: Optional[str] = None,
         show_help: bool = True,
+        controller: Optional[ComplianceController] = None,
+        start_keyboard_listener: bool = True,
+        enable_plotter: bool = True,
+        enable_force_perturbation: bool = True,
     ) -> None:
         self.name = name
         self.robot = robot
 
         self.repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-        selected_config_name: str
-        if config_name is not None:
-            selected_config_name = str(config_name)
-        elif self.robot == "leap":
-            selected_config_name = "leap.gin"
-        elif self.robot == "g1":
-            selected_config_name = "g1.gin"
-        elif self.robot == "arx":
-            selected_config_name = "arx.gin"
+        if controller is None:
+            selected_config_name: str
+            if config_name is not None:
+                selected_config_name = str(config_name)
+            elif self.robot == "leap":
+                selected_config_name = "leap.gin"
+            elif self.robot == "g1":
+                selected_config_name = "g1.gin"
+            elif self.robot == "arx":
+                selected_config_name = "arx.gin"
+            else:
+                selected_config_name = "toddlerbot.gin"
+
+            gin.clear_config()
+            gin.parse_config_file(
+                os.path.join(self.repo_root, "config", selected_config_name)
+            )
+            gin.bind_parameter("WrenchSimConfig.view", False)
+            gin.bind_parameter("WrenchSimConfig.render", False)
+
+            controller_cfg = ControllerConfig()
+            self.controller = ComplianceController(
+                config=controller_cfg,
+                estimate_config=WrenchEstimateConfig(),
+                ref_config=RefConfig(),
+            )
         else:
-            selected_config_name = "toddlerbot.gin"
+            self.controller = controller
 
-        gin.clear_config()
-        gin.parse_config_file(
-            os.path.join(self.repo_root, "config", selected_config_name)
-        )
-        gin.bind_parameter("WrenchSimConfig.view", False)
-        gin.bind_parameter("WrenchSimConfig.render", False)
-
-        controller_cfg = ControllerConfig()
         compliance_cfg = ComplianceConfig()
         self.compliance_cfg = compliance_cfg
-        self.controller = ComplianceController(
-            config=controller_cfg,
-            estimate_config=WrenchEstimateConfig(),
-            ref_config=RefConfig(),
-        )
         if self.controller.compliance_ref is None:
             raise ValueError("Controller compliance_ref must be configured.")
 
@@ -130,8 +138,10 @@ class CompliancePolicy:
             site_names=self.wrench_site_names,
             show_help=show_help,
         )
-        self.key_listener = KeyboardListener(self.teleop)
-        self.key_listener.start()
+        self.key_listener: Optional[KeyboardListener] = None
+        if bool(start_keyboard_listener):
+            self.key_listener = KeyboardListener(self.teleop)
+            self.key_listener.start()
 
         self.mass = float(self.controller.ref_config.mass)
         self.inertia_diag = np.asarray(
@@ -147,13 +157,18 @@ class CompliancePolicy:
         self.command_matrix = np.zeros(
             (self.num_sites, COMMAND_LAYOUT.width), dtype=np.float32
         )
+        self.enable_force_perturbation = bool(enable_force_perturbation)
         self.force_site_names = tuple(self.wrench_site_names)
         self.force_site_ids = np.asarray(
             [self.wrench_site_ids[name] for name in self.force_site_names],
             dtype=np.int32,
         )
         self.force_rng = np.random.default_rng()
-        self.force_max = float(compliance_cfg.perturb_force_max)
+        self.force_max = (
+            float(compliance_cfg.perturb_force_max)
+            if self.enable_force_perturbation
+            else 0.0
+        )
         self.force_vis_scale = 0.1
         self.perturb_site_forces: Optional[npt.NDArray[np.float32]] = None
         self.force_active = False
@@ -175,8 +190,10 @@ class CompliancePolicy:
         self.x_obs_log: list[np.ndarray] = []
         self.obs_motor_pos_log: list[np.ndarray] = []
 
-        self.plotter = CompliancePlotter(
-            site_names=self.wrench_site_names, enabled=True
+        self.plotter = (
+            CompliancePlotter(site_names=self.wrench_site_names, enabled=True)
+            if bool(enable_plotter)
+            else None
         )
 
         self.is_prepared = False
@@ -233,6 +250,7 @@ class CompliancePolicy:
         self,
         pose_command: npt.NDArray[np.float32],
         wrench_command: Optional[npt.NDArray[np.float32]] = None,
+        measured_wrenches: Optional[Dict[str, npt.NDArray[np.float32]]] = None,
     ) -> npt.NDArray[np.float32]:
         cmd = np.zeros((self.num_sites, COMMAND_LAYOUT.width), dtype=np.float32)
         cmd[:, COMMAND_LAYOUT.position] = pose_command[:, :3]
@@ -246,10 +264,82 @@ class CompliancePolicy:
         wrench_cmd = self.wrench_command if wrench_command is None else wrench_command
         cmd[:, COMMAND_LAYOUT.force] = wrench_cmd[:, :3]
         cmd[:, COMMAND_LAYOUT.torque] = wrench_cmd[:, 3:6]
+        if measured_wrenches is not None:
+            for idx, site_name in enumerate(self.wrench_site_names):
+                wrench = measured_wrenches.get(site_name)
+                if wrench is None:
+                    continue
+                wrench_arr = np.asarray(wrench, dtype=np.float32).reshape(-1)
+                if wrench_arr.shape[0] < 6:
+                    continue
+                cmd[idx, COMMAND_LAYOUT.measured_force] = wrench_arr[:3]
+                cmd[idx, COMMAND_LAYOUT.measured_torque] = wrench_arr[3:6]
         return cmd
 
     def compute_direct_action(self) -> npt.NDArray[np.float32]:
         return np.asarray(self.ref_motor_pos, dtype=np.float32).copy()
+
+    def apply_controller_step(
+        self,
+        *,
+        command_matrix: npt.NDArray[np.float32],
+        target_motor_pos: npt.ArrayLike,
+        measured_wrenches: Optional[Dict[str, npt.NDArray[np.float32]]] = None,
+        site_names: Optional[Sequence[str]] = None,
+        motor_torques: Optional[npt.ArrayLike] = None,
+        qpos: Optional[npt.ArrayLike] = None,
+        controlled_actuators_only: bool = False,
+    ) -> tuple[npt.NDArray[np.float32], Optional[ComplianceState]]:
+        if motor_torques is None:
+            motor_torque_arr = np.asarray(
+                self.controller.wrench_sim.data.actuator_force, dtype=np.float32
+            )
+        else:
+            motor_torque_arr = np.asarray(motor_torques, dtype=np.float32)
+
+        if qpos is None:
+            qpos_arr = np.asarray(self.controller.wrench_sim.data.qpos, dtype=np.float32)
+        else:
+            qpos_arr = np.asarray(qpos, dtype=np.float32)
+
+        wrenches_out, state_ref = self.controller.step(
+            command_matrix=np.asarray(command_matrix, dtype=np.float32),
+            motor_torques=motor_torque_arr,
+            qpos=qpos_arr,
+        )
+
+        next_target = np.asarray(target_motor_pos, dtype=np.float32).copy()
+        if state_ref is not None:
+            state_ref_motor = np.asarray(state_ref.motor_pos, dtype=np.float32)
+            if (
+                controlled_actuators_only
+                and self.controller.compliance_ref is not None
+                and self.controller.compliance_ref.actuator_indices is not None
+            ):
+                actuator_indices = np.asarray(
+                    self.controller.compliance_ref.actuator_indices, dtype=np.int32
+                )
+                valid_idx = actuator_indices[
+                    np.logical_and(
+                        actuator_indices >= 0,
+                        actuator_indices < min(next_target.shape[0], state_ref_motor.shape[0]),
+                    )
+                ]
+                next_target[valid_idx] = state_ref_motor[valid_idx]
+            elif state_ref_motor.shape == next_target.shape:
+                next_target = state_ref_motor.copy()
+            else:
+                copied = min(next_target.shape[0], state_ref_motor.shape[0])
+                next_target[:copied] = state_ref_motor[:copied]
+
+        if measured_wrenches is not None:
+            sites = self.wrench_site_names if site_names is None else tuple(site_names)
+            for site in sites:
+                wrench = wrenches_out.get(site)
+                if wrench is not None:
+                    measured_wrenches[str(site)] = np.asarray(wrench, dtype=np.float32)
+
+        return next_target, state_ref
 
     def _compute_reference_and_log(self, obs: Any) -> ComplianceState:
         qpos = np.asarray(obs.qpos, dtype=np.float32)
@@ -328,6 +418,12 @@ class CompliancePolicy:
         self._alignment_applied = True
 
     def _update_force_perturbation(self) -> None:
+        if not bool(self.enable_force_perturbation):
+            if self.perturb_site_forces is not None:
+                self.perturb_site_forces[:] = 0.0
+            self.force_active = False
+            return
+
         pos_offsets, rot_offsets, force_enabled = self.teleop.snapshot()
         self.pose_command[:, :3] = self.base_pose_command[:, :3] + pos_offsets
         self.pose_command[:, 3:6] = self.base_pose_command[:, 3:6] + rot_offsets
@@ -380,7 +476,7 @@ class CompliancePolicy:
 
     def step(self, obs: Any, sim: Any) -> npt.NDArray[np.float32]:
         has_mujoco_state = str(getattr(sim, "name", "")).lower() == "mujoco"
-        if has_mujoco_state:
+        if has_mujoco_state and bool(self.enable_force_perturbation):
             if self.perturb_site_forces is None:
                 self.perturb_site_forces = np.zeros(
                     (len(self.force_site_names), 3), dtype=np.float32
@@ -409,7 +505,11 @@ class CompliancePolicy:
             self._align_command_to_observation(obs)
 
         self._update_force_perturbation()
-        if has_mujoco_state and self.perturb_site_forces is not None:
+        if (
+            has_mujoco_state
+            and bool(self.enable_force_perturbation)
+            and self.perturb_site_forces is not None
+        ):
             if self.site_force_applier is not None:
                 self.site_force_applier(sim.data, self.perturb_site_forces)
             sim.set_debug_site_targets(

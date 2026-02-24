@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
-from examples.compliance import CompliancePolicy
 from examples.compliance_model_based_leap import LeapModelBasedPolicy
 from examples.compliance_model_based_toddlerbot import ToddlerbotModelBasedPolicy
 
 
-class ModelBasedPolicy(CompliancePolicy):
+class ModelBasedPolicy:
     def __init__(
         self,
         *,
@@ -51,7 +52,10 @@ class ModelBasedPolicy(CompliancePolicy):
         self.done = bool(getattr(self.impl, "done", False))
         return out
 
-    def close(self) -> None:
+    def close(self, exp_folder_path: str = "") -> None:
         close_fn = getattr(self.impl, "close", None)
         if callable(close_fn):
-            close_fn()
+            try:
+                close_fn(exp_folder_path=exp_folder_path)
+            except TypeError:
+                close_fn()
