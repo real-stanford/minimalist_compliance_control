@@ -11,7 +11,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
 
-from minimalist_compliance_control.ik_solvers import MinkIK
+from minimalist_compliance_control.ik_solvers import IKConfig, MinkIK
 
 
 @dataclass(frozen=True)
@@ -54,47 +54,52 @@ class ComplianceReference:
         site_names: Sequence[str],
         actuator_indices: npt.NDArray[np.int32],
         joint_indices: npt.NDArray[np.int32],
+        joint_names: Sequence[str],
         joint_to_actuator_fn: Callable,
         actuator_to_joint_fn: Callable,
         default_motor_pos: npt.NDArray[np.float32],
         default_qpos: npt.NDArray[np.float32],
-        fixed_model_xml_path: Optional[str],
-        q_start_idx: int,
-        qd_start_idx: int,
-        ik_position_only: bool,
         mass: float,
         inertia_diag: npt.NDArray[np.float32],
-        mink_num_iter: int,
-        mink_damping: float,
-        avoid_self_collision: bool = False,
+        fixed_model_xml_path: Optional[str] = None,
+        ik_config: Optional[IKConfig] = None,
     ) -> None:
         del data
 
         self.dt = float(dt)
         self.control_dt = float(dt)
         self.model = model
+        self.fixed_model_xml_path = (
+            str(fixed_model_xml_path) if fixed_model_xml_path else None
+        )
         self.mass = float(mass)
         self.inertia_diag = np.asarray(inertia_diag, dtype=np.float32)
-        self.q_start_idx = int(q_start_idx)
-        self.qd_start_idx = int(qd_start_idx)
+        self.ik_config = IKConfig() if ik_config is None else ik_config
 
         self.site_names = list(site_names)
         if not self.site_names:
             raise ValueError("site_names must be provided.")
-        site_set = set(self.site_names)
-        model_hint = (fixed_model_xml_path or "").lower()
-        self.is_toddlerbot = ("toddlerbot" in model_hint) or {
-            "left_hand_center",
-            "right_hand_center",
-        }.issubset(site_set)
-
         self.actuator_indices = np.asarray(actuator_indices, dtype=np.int32)
         self.joint_indices = np.asarray(joint_indices, dtype=np.int32)
+        self.joint_names = [str(name) for name in joint_names]
+        if len(self.joint_names) != int(self.joint_indices.shape[0]):
+            raise ValueError(
+                "joint_names length must match joint_indices length, got "
+                f"{len(self.joint_names)} vs {self.joint_indices.shape[0]}."
+            )
         self.joint_to_actuator_fn = joint_to_actuator_fn
         self.actuator_to_joint_fn = actuator_to_joint_fn
 
         self.default_motor_pos = np.asarray(default_motor_pos, dtype=np.float32)
         self.default_qpos = np.asarray(default_qpos, dtype=np.float32)
+
+        self._floating_base_body_id: Optional[int] = None
+        for joint_id in range(self.model.njnt):
+            if int(self.model.jnt_type[joint_id]) == int(mujoco.mjtJoint.mjJNT_FREE):
+                self._floating_base_body_id = int(self.model.jnt_bodyid[joint_id])
+                break
+        self._last_base_pos = np.zeros(3, dtype=np.float32)
+        self._last_base_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
         self.site_ids: list[int] = []
         for site_name in self.site_names:
@@ -103,37 +108,155 @@ class ComplianceReference:
                 raise ValueError(f"Site '{site_name}' not found in model.")
             self.site_ids.append(int(site_id))
 
-        self.ik_position_only = bool(ik_position_only)
-        self.mink_num_iter = int(mink_num_iter)
-        self.mink_damping = float(mink_damping)
+        self.ik_position_only = bool(self.ik_config.ik_position_only)
+        self.mink_num_iter = int(self.ik_config.mink_num_iter)
+        self.mink_damping = float(self.ik_config.mink_damping)
 
-        self.fixed_model = None
-        self.fixed_data = None
-        mink_model = model
-        if fixed_model_xml_path:
-            self.fixed_model = mujoco.MjModel.from_xml_path(fixed_model_xml_path)
-            self.fixed_data = mujoco.MjData(self.fixed_model)
-            mink_model = self.fixed_model
+        if self.fixed_model_xml_path is not None:
+            self.ik_model = mujoco.MjModel.from_xml_path(self.fixed_model_xml_path)
+            self._ik_input_data = mujoco.MjData(self.ik_model)
+        else:
+            self.ik_model = self.model
+            self._ik_input_data = None
+
         self.ik_site_ids: list[int] = []
         for site_name in self.site_names:
-            site_id = mujoco.mj_name2id(mink_model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+            site_id = mujoco.mj_name2id(
+                self.ik_model, mujoco.mjtObj.mjOBJ_SITE, site_name
+            )
             if site_id < 0:
                 raise ValueError(f"Site '{site_name}' not found in IK model.")
             self.ik_site_ids.append(int(site_id))
+        self.ik_joint_indices = self._resolve_joint_qpos_indices(
+            self.ik_model, self.joint_names
+        )
+
+        self._full_to_ik_qpos_slices = self._build_qpos_copy_slices(
+            self.model, self.ik_model
+        )
 
         self.mink_ik = MinkIK(
-            model=mink_model,
+            model=self.ik_model,
             site_names=self.site_names,
-            joint_indices=self.joint_indices,
+            joint_indices=self.ik_joint_indices,
             joint_to_actuator_fn=self.joint_to_actuator_fn,
             ik_position_only=self.ik_position_only,
-            source_q_start_idx=self.q_start_idx,
-            enable_self_collision_avoidance=bool(avoid_self_collision),
-            is_toddlerbot=bool(self.is_toddlerbot),
+            source_q_start_idx=0,
+            enable_self_collision_avoidance=bool(self.ik_config.avoid_self_collision),
+            ik_config=self.ik_config,
         )
 
         default_state = self.get_default_state()
         self.site_home_pose = np.asarray(default_state.x_ref, dtype=np.float32).copy()
+
+    def _resolve_joint_qpos_indices(
+        self, model: mujoco.MjModel, joint_names: Sequence[str]
+    ) -> npt.NDArray[np.int32]:
+        indices: list[int] = []
+        for name in joint_names:
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, str(name))
+            if joint_id < 0:
+                raise ValueError(f"Joint {name!r} not found in IK model.")
+            indices.append(int(model.jnt_qposadr[joint_id]))
+        return np.asarray(indices, dtype=np.int32)
+
+    def _joint_qpos_width(self, model: mujoco.MjModel, joint_id: int) -> int:
+        jnt_type = int(model.jnt_type[joint_id])
+        if jnt_type == int(mujoco.mjtJoint.mjJNT_FREE):
+            return 7
+        if jnt_type == int(mujoco.mjtJoint.mjJNT_BALL):
+            return 4
+        return 1
+
+    def _build_qpos_copy_slices(
+        self, full_model: mujoco.MjModel, ik_model: mujoco.MjModel
+    ) -> list[tuple[int, int, int]]:
+        full_joint_meta: dict[str, tuple[int, int]] = {}
+        for joint_id in range(full_model.njnt):
+            name = mujoco.mj_id2name(full_model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            if name is None:
+                continue
+            start = int(full_model.jnt_qposadr[joint_id])
+            width = self._joint_qpos_width(full_model, joint_id)
+            full_joint_meta[str(name)] = (start, width)
+
+        slices: list[tuple[int, int, int]] = []
+        for joint_id in range(ik_model.njnt):
+            name = mujoco.mj_id2name(ik_model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            if name is None:
+                continue
+            full_meta = full_joint_meta.get(str(name))
+            if full_meta is None:
+                continue
+            ik_start = int(ik_model.jnt_qposadr[joint_id])
+            ik_width = self._joint_qpos_width(ik_model, joint_id)
+            full_start, full_width = full_meta
+            if ik_width != full_width:
+                continue
+            slices.append((full_start, ik_start, ik_width))
+        return slices
+
+    def _copy_full_state_to_ik_data(self, data: mujoco.MjData) -> mujoco.MjData:
+        if self._ik_input_data is None:
+            return data
+        ik_data = self._ik_input_data
+        ik_data.qpos[:] = 0.0
+        for full_start, ik_start, width in self._full_to_ik_qpos_slices:
+            ik_data.qpos[ik_start : ik_start + width] = data.qpos[
+                full_start : full_start + width
+            ]
+        mujoco.mj_forward(self.ik_model, ik_data)
+        return ik_data
+
+    def _get_base_pose(
+        self, data: mujoco.MjData
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        if self._floating_base_body_id is None:
+            return (
+                np.zeros(3, dtype=np.float32),
+                np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            )
+        body_id = int(self._floating_base_body_id)
+        base_pos = np.asarray(data.xpos[body_id], dtype=np.float32).copy()
+        base_quat = np.asarray(data.xquat[body_id], dtype=np.float32).copy()
+        return base_pos, base_quat
+
+    def transform_x_ref_to_base_frame(
+        self,
+        x_ref_world: npt.NDArray[np.float32],
+        base_pos: npt.NDArray[np.float32],
+        base_quat: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
+        base_rot = R.from_quat(
+            np.asarray([base_quat[1], base_quat[2], base_quat[3], base_quat[0]])
+        )
+        base_inv = base_rot.inv()
+        x_ref_base = np.asarray(x_ref_world, dtype=np.float32).copy()
+        positions = np.asarray(x_ref_world[:, :3], dtype=np.float32)
+        x_ref_base[:, :3] = base_inv.apply(positions - base_pos[None, :]).astype(
+            np.float32
+        )
+        ori_world = R.from_rotvec(np.asarray(x_ref_world[:, 3:6], dtype=np.float32))
+        ori_base = base_inv * ori_world
+        x_ref_base[:, 3:6] = ori_base.as_rotvec().astype(np.float32)
+        return x_ref_base
+
+    def transform_x_ref_from_base_frame(
+        self,
+        x_ref_base: npt.NDArray[np.float32],
+        base_pos: npt.NDArray[np.float32],
+        base_quat: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
+        base_rot = R.from_quat(
+            np.asarray([base_quat[1], base_quat[2], base_quat[3], base_quat[0]])
+        )
+        x_ref_world = np.asarray(x_ref_base, dtype=np.float32).copy()
+        positions = np.asarray(x_ref_base[:, :3], dtype=np.float32)
+        x_ref_world[:, :3] = base_rot.apply(positions).astype(np.float32) + base_pos
+        ori_base = R.from_rotvec(np.asarray(x_ref_base[:, 3:6], dtype=np.float32))
+        ori_world = base_rot * ori_base
+        x_ref_world[:, 3:6] = ori_world.as_rotvec().astype(np.float32)
+        return x_ref_world
 
     def get_x_ref_from_motor_pos(
         self, motor_pos: npt.NDArray[np.float32]
@@ -146,7 +269,7 @@ class ComplianceReference:
             )
 
         qpos = np.asarray(self.default_qpos, dtype=np.float32).copy()
-        qpos_indices = int(self.q_start_idx) + self.joint_indices
+        qpos_indices = np.asarray(self.joint_indices, dtype=np.int32)
         if int(np.min(qpos_indices)) < 0 or int(np.max(qpos_indices)) >= int(
             qpos.shape[0]
         ):
@@ -264,9 +387,22 @@ class ComplianceReference:
         a_ref: npt.NDArray[np.float32],
     ) -> npt.NDArray[np.float32]:
         del a_ref
+
+        x_ref_ik = np.asarray(x_ref, dtype=np.float32)
+        ik_data = data
+        if self.fixed_model_xml_path is not None:
+            base_pos, base_quat = self._get_base_pose(data)
+            self._last_base_pos = base_pos.copy()
+            self._last_base_quat = base_quat.copy()
+            x_ref_ik = self.transform_x_ref_to_base_frame(x_ref_ik, base_pos, base_quat)
+            ik_data = self._copy_full_state_to_ik_data(data)
+        else:
+            self._last_base_pos = np.zeros(3, dtype=np.float32)
+            self._last_base_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
         return self.mink_ik.solve(
-            data,
-            x_ref,
+            ik_data,
+            x_ref_ik,
             v_ref,
             self.dt,
             num_iter=self.mink_num_iter,
@@ -280,8 +416,6 @@ class ComplianceReference:
         model: mujoco.MjModel,
         data: mujoco.MjData,
         site_names: Optional[list[str]] = None,
-        base_pos: Optional[npt.NDArray[np.float32]] = None,
-        base_quat: Optional[npt.NDArray[np.float32]] = None,
     ) -> ComplianceState:
         del model, site_names
 
@@ -290,25 +424,8 @@ class ComplianceReference:
             np.asarray(last_state.v_ref, dtype=np.float32),
             command_matrix,
         )
-
-        base_pos_arr = (
-            np.asarray(base_pos, dtype=np.float32)
-            if base_pos is not None
-            else np.zeros(3, dtype=np.float32)
-        )
-        base_rot_arr = (
-            np.asarray(base_quat, dtype=np.float32)
-            if base_quat is not None
-            else np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        )
-        x_ref_for_ik = self.transform_x_ref_to_base_frame(
-            x_ref,
-            base_pos_arr,
-            base_rot_arr,
-        )
-
-        actuator_pos = self.get_actuator_ref(data, x_ref_for_ik, v_ref, a_ref)
-        x_ik = self.get_x_ik_world(base_pos_arr, base_rot_arr)
+        actuator_pos = self.get_actuator_ref(data, x_ref, v_ref, a_ref)
+        x_ik = self.get_x_ik_world()
         motor_pos = self.default_motor_pos.copy()
         motor_pos[self.actuator_indices] = actuator_pos
 
@@ -321,56 +438,18 @@ class ComplianceReference:
             qpos=np.asarray(data.qpos, dtype=np.float32).copy(),
         )
 
-    def get_x_ik_world(
-        self,
-        base_pos: npt.NDArray[np.float32],
-        base_quat_wxyz: npt.NDArray[np.float32],
-    ) -> npt.NDArray[np.float32]:
-        x_ik_local = np.zeros((len(self.site_names), 6), dtype=np.float32)
+    def get_x_ik_world(self) -> npt.NDArray[np.float32]:
+        x_ik = np.zeros((len(self.site_names), 6), dtype=np.float32)
         cfg_data = self.mink_ik.config.data
         for idx, site_id in enumerate(self.ik_site_ids):
-            x_ik_local[idx, 0:3] = np.asarray(
-                cfg_data.site_xpos[site_id], dtype=np.float32
-            )
+            x_ik[idx, 0:3] = np.asarray(cfg_data.site_xpos[site_id], dtype=np.float32)
             rotmat = np.asarray(cfg_data.site_xmat[site_id], dtype=np.float32).reshape(
                 3, 3
             )
-            x_ik_local[idx, 3:6] = R.from_matrix(rotmat).as_rotvec().astype(np.float32)
+            x_ik[idx, 3:6] = R.from_matrix(rotmat).as_rotvec().astype(np.float32)
 
-        base_pos_arr = np.asarray(base_pos, dtype=np.float32).reshape(3)
-        base_quat = np.asarray(base_quat_wxyz, dtype=np.float32).reshape(4)
-        base_quat = base_quat / (np.linalg.norm(base_quat) + 1e-9)
-        base_quat_xyzw = base_quat[[1, 2, 3, 0]]
-        base_rot = R.from_quat(base_quat_xyzw)
-
-        pos_world = base_rot.apply(x_ik_local[:, :3]) + base_pos_arr
-        rot_world = (
-            base_rot * R.from_rotvec(np.asarray(x_ik_local[:, 3:6], dtype=np.float32))
-        ).as_rotvec()
-        return np.concatenate(
-            [
-                np.asarray(pos_world, dtype=np.float32),
-                np.asarray(rot_world, dtype=np.float32),
-            ],
-            axis=1,
-        ).astype(np.float32)
-
-    def transform_x_ref_to_base_frame(
-        self,
-        x_ref: npt.NDArray[np.float32],
-        base_pos: npt.NDArray[np.float32],
-        base_quat_wxyz: npt.NDArray[np.float32],
-    ) -> npt.NDArray[np.float32]:
-        base_pos = np.asarray(base_pos, dtype=np.float32).reshape(3)
-        base_quat = np.asarray(base_quat_wxyz, dtype=np.float32).reshape(4)
-        base_quat = base_quat / (np.linalg.norm(base_quat) + 1e-9)
-        base_quat_xyzw = base_quat[[1, 2, 3, 0]]
-        base_rot = R.from_quat(base_quat_xyzw)
-
-        pos_world = np.asarray(x_ref[:, :3], dtype=np.float32)
-        rotvec_world = np.asarray(x_ref[:, 3:6], dtype=np.float32)
-        pos_local = base_rot.inv().apply(pos_world - base_pos)
-        rot_world = R.from_rotvec(rotvec_world).as_matrix()
-        rot_local = np.einsum("ij,njk->nik", base_rot.as_matrix().T, rot_world)
-        rotvec_local = R.from_matrix(rot_local).as_rotvec().astype(np.float32)
-        return np.concatenate([pos_local, rotvec_local], axis=-1).astype(np.float32)
+        if self.fixed_model_xml_path is None:
+            return x_ik
+        return self.transform_x_ref_from_base_frame(
+            x_ik, self._last_base_pos, self._last_base_quat
+        )

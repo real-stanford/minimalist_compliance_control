@@ -11,17 +11,17 @@ WrenchSimConfig.render = False
 ControllerConfig.xml_path = "descriptions/leap_hand/scene_fixed.xml"
 ControllerConfig.site_names = ("if_tip", "mf_tip", "rf_tip", "th_tip")
 ControllerConfig.fixed_base = True
-ControllerConfig.joint_indices_by_site = {
-    "if_tip": (0, 1, 2, 3),
-    "mf_tip": (4, 5, 6, 7),
-    "rf_tip": (8, 9, 10, 11),
-    "th_tip": (12, 13, 14, 15),
+ControllerConfig.joint_names_by_site = {
+    "if_tip": ("if_mcp", "if_rot", "if_pip", "if_dip"),
+    "mf_tip": ("mf_mcp", "mf_rot", "mf_pip", "mf_dip"),
+    "rf_tip": ("rf_mcp", "rf_rot", "rf_pip", "rf_dip"),
+    "th_tip": ("th_cmc", "th_axl", "th_mcp", "th_ipl"),
 }
-ControllerConfig.motor_indices_by_site = {
-    "if_tip": (0, 1, 2, 3),
-    "mf_tip": (4, 5, 6, 7),
-    "rf_tip": (8, 9, 10, 11),
-    "th_tip": (12, 13, 14, 15),
+ControllerConfig.motor_names_by_site = {
+    "if_tip": ("if_mcp_act", "if_rot_act", "if_pip_act", "if_dip_act"),
+    "mf_tip": ("mf_mcp_act", "mf_rot_act", "mf_pip_act", "mf_dip_act"),
+    "rf_tip": ("rf_mcp_act", "rf_rot_act", "rf_pip_act", "rf_dip_act"),
+    "th_tip": ("th_cmc_act", "th_axl_act", "th_mcp_act", "th_ipl_act"),
 }
 ControllerConfig.gear_ratios_by_site = {
     "if_tip": (1, 1, 1, 1),
@@ -41,19 +41,15 @@ WrenchEstimateConfig.normal_axis = "+z"
 
 # Compliance reference (fixed base)
 RefConfig.dt = 0.02
-RefConfig.q_start_idx = 0
-RefConfig.qd_start_idx = 0
-RefConfig.ik_position_only = True
-RefConfig.fixed_model_xml_path = "descriptions/leap_hand/left_hand_fixed.xml"
 RefConfig.mass = 1.0
 RefConfig.inertia_diag = (1.0, 1.0, 1.0)
-RefConfig.mink_num_iter = 1
-RefConfig.mink_damping = 0.1
-RefConfig.actuator_indices = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+RefConfig.fixed_model_xml_path = "descriptions/leap_hand/left_hand_fixed.xml"
+IKConfig.ik_position_only = True
+IKConfig.mink_num_iter = 1
+IKConfig.mink_damping = 0.1
+IKConfig.avoid_self_collision = False
 RefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 RefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-MinkIK.hand_orientation_cost_default = 10.0
-MinkIK.hand_orientation_cost_position_only = 0.0
 MinkIK.site_orientation_cost_overrides = {
     "if_tip": 0.2,
     "mf_tip": 0.2,
@@ -70,8 +66,7 @@ ComplianceConfig.initial_pose = (
     (-0.228, -0.094, 0.149, -0.07, 2.42, 0.02),
 )
 ComplianceConfig.use_compliance = True
-ComplianceConfig.use_balance = False
-ComplianceConfig.balance_yaw = False
+ComplianceConfig.perturb_force_max = 3.0
 
 # Motor config paths
 MotorConfigPaths.default_config_path = "descriptions/default.yml"

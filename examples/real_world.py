@@ -88,7 +88,7 @@ class RealWorld(BaseSim):
         if not isinstance(actuators_cfg, dict):
             actuators_cfg = {}
         self.gain_backdrive = float(actuators_cfg.get("gain_backdrive", 1.0))
-        self.use_balance = bool(self.config.get("robot", {}).get("use_balance", False))
+        self.use_balance = False
 
         self.motor_groups: np.ndarray = np.asarray(
             [str(motors_cfg[name].get("group", "arm")) for name in self.motor_ordering],

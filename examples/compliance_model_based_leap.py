@@ -2519,7 +2519,6 @@ class LeapModelBasedPolicy(CompliancePolicy):
                 command_matrix=command_matrix,
                 motor_torques=motor_tor_obs,
                 qpos=qpos_obs,
-                use_estimated_wrench=False,
             )
             if state_ref is not None:
                 self.motor_cmd = np.asarray(state_ref.motor_pos, dtype=np.float32)

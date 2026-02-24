@@ -1305,7 +1305,6 @@ def _run_compliance_step(
         command_matrix=command_matrix.astype(np.float32),
         motor_torques=motor_torques_arr,
         qpos=np.asarray(data.qpos, dtype=np.float32),
-        use_estimated_wrench=True,
     )
 
     next_target = target_motor_pos

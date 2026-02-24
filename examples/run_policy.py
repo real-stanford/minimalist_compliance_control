@@ -79,7 +79,7 @@ def _build_sim(
     if args.sim == "mujoco":
         model = mujoco.MjModel.from_xml_path(xml_path)
         data = mujoco.MjData(model)
-        if args.robot == "arx":
+        if args.robot in {"arx", "g1"}:
             custom_pd = False
         else:
             custom_pd = True
@@ -205,7 +205,7 @@ def run_policy(sim: Any, robot: str, policy: Any) -> None:
 def _parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Unified policy runner")
     parser.add_argument(
-        "--robot", type=str, required=True, choices=["toddlerbot", "leap", "arx"]
+        "--robot", type=str, required=True, choices=["toddlerbot", "leap", "arx", "g1"]
     )
     parser.add_argument("--sim", type=str, default="mujoco", choices=["mujoco", "real"])
     parser.add_argument(

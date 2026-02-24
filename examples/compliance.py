@@ -12,7 +12,7 @@ import joblib
 import numpy as np
 import numpy.typing as npt
 
-from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT
+from minimalist_compliance_control.compliance_ref import COMMAND_LAYOUT, ComplianceState
 from minimalist_compliance_control.controller import (
     ComplianceController,
     ControllerConfig,
@@ -44,8 +44,7 @@ class ComplianceConfig:
     initial_pose: Sequence[Sequence[float]] = ()
     ref_motor_pos: Sequence[float] = ()
     use_compliance: bool = True
-    use_balance: bool = False
-    balance_yaw: bool = False
+    perturb_force_max: float = 3.0
 
 
 class CompliancePolicy:
@@ -69,6 +68,8 @@ class CompliancePolicy:
             selected_config_name = str(config_name)
         elif self.robot == "leap":
             selected_config_name = "leap.gin"
+        elif self.robot == "g1":
+            selected_config_name = "g1.gin"
         elif self.robot == "arx":
             selected_config_name = "arx.gin"
         else:
@@ -114,6 +115,7 @@ class CompliancePolicy:
             self.default_state.x_ref, dtype=np.float32
         ).copy()
         init_pose_arr = np.asarray(compliance_cfg.initial_pose, dtype=np.float32)
+        self._has_initial_pose_override = bool(init_pose_arr.size > 0)
         if init_pose_arr.size > 0:
             if init_pose_arr.shape != (self.num_sites, 6):
                 raise ValueError(
@@ -151,7 +153,7 @@ class CompliancePolicy:
             dtype=np.int32,
         )
         self.force_rng = np.random.default_rng()
-        self.force_max = 3.0
+        self.force_max = float(compliance_cfg.perturb_force_max)
         self.force_vis_scale = 0.1
         self.perturb_site_forces: Optional[npt.NDArray[np.float32]] = None
         self.force_active = False
@@ -160,8 +162,9 @@ class CompliancePolicy:
         self.site_force_applier = None
 
         self.use_compliance = bool(compliance_cfg.use_compliance)
-        self.use_balance = bool(compliance_cfg.use_balance)
-        self.balance_yaw = bool(compliance_cfg.balance_yaw)
+        self._alignment_applied = False
+        self.use_balance = False
+        self.balance_yaw = False
 
         self.wrenches_by_site: Dict[str, npt.NDArray[np.float32]] = {}
 
@@ -300,6 +303,33 @@ class CompliancePolicy:
 
         return action
 
+    def _align_command_to_observation(self, obs: Any) -> None:
+        if self._alignment_applied:
+            return
+        if self._has_initial_pose_override:
+            self._alignment_applied = True
+            return
+
+        qpos = np.asarray(obs.qpos, dtype=np.float32)
+        self.controller.sync_qpos(qpos)
+        x_obs = self.controller.get_x_obs()
+        self.pose_command = x_obs.copy()
+        self.base_pose_command = x_obs.copy()
+
+        motor_pos = np.asarray(obs.motor_pos, dtype=np.float32).reshape(-1)
+        if motor_pos.shape[0] != self.default_motor_pos.shape[0]:
+            motor_pos = self.default_motor_pos.copy()
+        zeros = np.zeros_like(x_obs, dtype=np.float32)
+        self.controller._last_state = ComplianceState(
+            x_ref=x_obs.copy(),
+            x_ik=x_obs.copy(),
+            v_ref=zeros.copy(),
+            a_ref=zeros.copy(),
+            motor_pos=motor_pos.copy(),
+            qpos=qpos.copy(),
+        )
+        self._alignment_applied = True
+
     def _update_force_perturbation(self) -> None:
         pos_offsets, rot_offsets, force_enabled = self.teleop.snapshot()
         self.pose_command[:, :3] = self.base_pose_command[:, :3] + pos_offsets
@@ -377,6 +407,9 @@ class CompliancePolicy:
                 interpolate_action(float(obs.time), self.prep_time, self.prep_action),
                 dtype=np.float32,
             )
+
+        if not self._alignment_applied:
+            self._align_command_to_observation(obs)
 
         self._update_force_perturbation()
         if has_mujoco_state and self.perturb_site_forces is not None:
