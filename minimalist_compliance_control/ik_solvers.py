@@ -121,13 +121,10 @@ class MinkIK:
         self,
         data: mujoco.MjData,
         x_ref: npt.NDArray[np.float32],
-        v_ref: npt.NDArray[np.float32],
         dt: float,
         num_iter: int,
         damping: float,
     ) -> npt.NDArray[np.float32]:
-        del v_ref
-
         if self.config.data.qpos.shape[0] == data.qpos.shape[0]:
             self.config.data.qpos[:] = data.qpos.copy()
         else:

@@ -99,10 +99,8 @@ def _build_sim(
             from examples.real_world_g1 import RealWorldG1
 
             return RealWorldG1(
-                robot=str(args.robot),
                 control_dt=control_dt,
                 xml_path=str(xml_path),
-                merged_config=merged_config,
                 net_if=str(getattr(args, "ip", "")),
             )
         from examples.real_world import RealWorld
@@ -431,11 +429,7 @@ def main(args: Sequence[str] | None = None) -> None:
             site_ids=np.asarray(policy.force_site_ids, dtype=np.int32),
         )
 
-    run_policy(
-        sim=sim,
-        robot=str(parsed.robot),
-        policy=policy
-    )
+    run_policy(sim=sim, robot=str(parsed.robot), policy=policy)
 
 
 if __name__ == "__main__":

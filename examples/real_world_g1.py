@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from typing import Dict
 
 import mujoco
 import numpy as np
@@ -18,13 +18,10 @@ class RealWorldG1(BaseSim):
 
     def __init__(
         self,
-        robot: str,
         control_dt: float,
         xml_path: str,
-        merged_config: dict[str, Any] | None = None,
         net_if: str = "",
     ) -> None:
-        del robot, merged_config
         self.name = "real_world"
         self.control_dt = float(control_dt)
         self.xml_path = str(xml_path)
@@ -37,7 +34,9 @@ class RealWorldG1(BaseSim):
             if name is None:
                 raise ValueError(f"Actuator {i} has no name in XML: {self.xml_path}")
             self.motor_ordering.append(str(name))
-        self._motor_name_to_idx = {name: i for i, name in enumerate(self.motor_ordering)}
+        self._motor_name_to_idx = {
+            name: i for i, name in enumerate(self.motor_ordering)
+        }
 
         trnid = np.asarray(self.model.actuator_trnid[:, 0], dtype=np.int32)
         if np.any(trnid < 0):
@@ -55,21 +54,69 @@ class RealWorldG1(BaseSim):
         kd = np.ones(int(self.model.nu), dtype=np.float32) * 1.0
         g1_default_kp = np.asarray(
             [
-                60, 60, 60, 100, 40, 40,  # legs
-                60, 60, 60, 100, 40, 40,  # legs
-                60, 40, 40,  # waist
-                40, 40, 40, 40, 40, 40, 40,  # left arm
-                40, 40, 40, 40, 40, 40, 40,  # right arm
+                60,
+                60,
+                60,
+                100,
+                40,
+                40,  # legs
+                60,
+                60,
+                60,
+                100,
+                40,
+                40,  # legs
+                60,
+                40,
+                40,  # waist
+                40,
+                40,
+                40,
+                40,
+                40,
+                40,
+                40,  # left arm
+                40,
+                40,
+                40,
+                40,
+                40,
+                40,
+                40,  # right arm
             ],
             dtype=np.float32,
         )
         g1_default_kd = np.asarray(
             [
-                1, 1, 1, 2, 1, 1,  # legs
-                1, 1, 1, 2, 1, 1,  # legs
-                1, 1, 1,  # waist
-                1, 1, 1, 1, 1, 1, 1,  # left arm
-                1, 1, 1, 1, 1, 1, 1,  # right arm
+                1,
+                1,
+                1,
+                2,
+                1,
+                1,  # legs
+                1,
+                1,
+                1,
+                2,
+                1,
+                1,  # legs
+                1,
+                1,
+                1,  # waist
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,  # left arm
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,  # right arm
             ],
             dtype=np.float32,
         )
@@ -89,11 +136,6 @@ class RealWorldG1(BaseSim):
             interface,
             kp.tolist(),
             kd.tolist(),
-            [0.0] * int(self.model.nu),
-            [0.0] * int(self.model.nu),
-            ["position"] * int(self.model.nu),
-            0,
-            0,
             actuator_names=self.motor_ordering,
             control_dt=self.control_dt,
         )
@@ -116,7 +158,9 @@ class RealWorldG1(BaseSim):
     def sync(self) -> bool:
         return True
 
-    def _flatten_state(self, motor_state: Dict[str, Dict[str, list[float]]]) -> Dict[str, np.ndarray]:
+    def _flatten_state(
+        self, motor_state: Dict[str, Dict[str, list[float]]]
+    ) -> Dict[str, np.ndarray]:
         all_pos = []
         all_vel = []
         all_cur = []

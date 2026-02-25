@@ -30,10 +30,8 @@ class ModelBasedPolicy:
         if robot_name == "leap":
             self.impl = LeapModelBasedPolicy(
                 scene_xml=str(scene_xml),
-                duration=float(duration),
                 control_dt=float(control_dt),
                 prep_duration=float(prep_duration),
-                status_interval=float(status_interval),
                 vis=bool(vis),
             )
         elif robot_name == "toddlerbot":

@@ -439,7 +439,6 @@ class ComplianceController:
         self.compliance_ref = ComplianceReference(
             dt=float(cfg.dt),
             model=model,
-            data=data,
             site_names=site_names,
             actuator_indices=actuator_indices,
             joint_indices=joint_indices,
@@ -484,11 +483,8 @@ class ComplianceController:
         command_matrix: npt.NDArray[np.float32],
         motor_torques: npt.NDArray[np.float32],
         qpos: npt.NDArray[np.float32],
-        base_pos: Optional[npt.NDArray[np.float32]] = None,
-        base_quat: Optional[npt.NDArray[np.float32]] = None,
     ) -> tuple[Dict[str, npt.NDArray[np.float32]], Optional[ComplianceState]]:
         """Run one loop and return estimated wrenches and optional compliance state."""
-        del base_pos, base_quat
         command_matrix = np.asarray(command_matrix, dtype=np.float32).copy()
         self.sync_qpos(qpos)
 
@@ -540,7 +536,6 @@ class ComplianceController:
             state_ref = self.compliance_ref.get_state_ref(
                 command_matrix=command_matrix,
                 last_state=self._last_state,
-                model=self.wrench_sim.model,
                 data=self.wrench_sim.data,
             )
             self._last_state = state_ref

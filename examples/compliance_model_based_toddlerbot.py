@@ -1036,14 +1036,8 @@ def _distribute_rigid_body_motion(
     return result
 
 
-def _maybe_print_ochs_world_velocity(
-    runtime: PolicyRuntime,
-    cfg: PolicyConfig,
-    t: float,
-    distributed_motion: Dict[str, ArrayF64],
-) -> None:
-    del runtime, cfg, t, distributed_motion
-    return
+def _maybe_print_ochs_world_velocity() -> None:
+    pass
 
 
 def _assign_stiffness(
@@ -1637,9 +1631,7 @@ class ToddlerbotModelBasedPolicy(CompliancePolicy):
                 distributed_motion = _distribute_rigid_body_motion(
                     self.runtime, ochs_solution, state, self.control_dt
                 )
-                _maybe_print_ochs_world_velocity(
-                    self.runtime, self.cfg, t, distributed_motion
-                )
+                _maybe_print_ochs_world_velocity()
                 _assign_stiffness(
                     self.runtime,
                     self.cfg,

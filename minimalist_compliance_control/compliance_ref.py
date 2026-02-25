@@ -50,7 +50,6 @@ class ComplianceReference:
         self,
         dt: float,
         model: mujoco.MjModel,
-        data: mujoco.MjData,
         site_names: Sequence[str],
         actuator_indices: npt.NDArray[np.int32],
         joint_indices: npt.NDArray[np.int32],
@@ -64,8 +63,6 @@ class ComplianceReference:
         fixed_model_xml_path: Optional[str] = None,
         ik_config: Optional[IKConfig] = None,
     ) -> None:
-        del data
-
         self.dt = float(dt)
         self.control_dt = float(dt)
         self.model = model
@@ -383,11 +380,7 @@ class ComplianceReference:
         self,
         data: mujoco.MjData,
         x_ref: npt.NDArray[np.float32],
-        v_ref: npt.NDArray[np.float32],
-        a_ref: npt.NDArray[np.float32],
     ) -> npt.NDArray[np.float32]:
-        del a_ref
-
         x_ref_ik = np.asarray(x_ref, dtype=np.float32)
         ik_data = data
         if self.fixed_model_xml_path is not None:
@@ -403,7 +396,6 @@ class ComplianceReference:
         return self.mink_ik.solve(
             ik_data,
             x_ref_ik,
-            v_ref,
             self.dt,
             num_iter=self.mink_num_iter,
             damping=self.mink_damping,
@@ -413,18 +405,14 @@ class ComplianceReference:
         self,
         command_matrix: npt.NDArray[np.float32],
         last_state: ComplianceState,
-        model: mujoco.MjModel,
         data: mujoco.MjData,
-        site_names: Optional[list[str]] = None,
     ) -> ComplianceState:
-        del model, site_names
-
         x_ref, v_ref, a_ref = self.integrate_commands(
             np.asarray(last_state.x_ref, dtype=np.float32),
             np.asarray(last_state.v_ref, dtype=np.float32),
             command_matrix,
         )
-        actuator_pos = self.get_actuator_ref(data, x_ref, v_ref, a_ref)
+        actuator_pos = self.get_actuator_ref(data, x_ref)
         x_ik = self.get_x_ik_world()
         motor_pos = self.default_motor_pos.copy()
         motor_pos[self.actuator_indices] = actuator_pos

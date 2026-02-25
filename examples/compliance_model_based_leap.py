@@ -1240,13 +1240,10 @@ class LeapModelBasedPolicy(CompliancePolicy):
         self,
         *,
         scene_xml: str = "",
-        duration: float = 120.0,
         control_dt: float = 0.02,
         prep_duration: float = 7.0,
-        status_interval: float = 1.0,
         vis: bool = True,
     ) -> None:
-        del duration, status_interval
         self.vis = bool(vis)
         super().__init__(
             name="compliance_model_based",
@@ -1395,7 +1392,9 @@ class LeapModelBasedPolicy(CompliancePolicy):
                 self.controller.wrench_sim.model, self.controller.wrench_sim.data
             )
         raw_wrenches = get_ground_truth_wrenches(
-            self.controller.wrench_sim.model, self.controller.wrench_sim.data, self.site_names
+            self.controller.wrench_sim.model,
+            self.controller.wrench_sim.data,
+            self.site_names,
         )
         self.measured_wrenches = {
             site_name: np.asarray(
@@ -1446,7 +1445,9 @@ class LeapModelBasedPolicy(CompliancePolicy):
                 qpos=(
                     np.asarray(obs.qpos, dtype=np.float32)
                     if obs.qpos is not None
-                    else np.asarray(self.controller.wrench_sim.data.qpos, dtype=np.float32)
+                    else np.asarray(
+                        self.controller.wrench_sim.data.qpos, dtype=np.float32
+                    )
                 ),
                 controlled_actuators_only=False,
             )

@@ -98,7 +98,9 @@ class CompliancePolicy:
                     os.path.dirname(xml_path), "left_hand_fixed.xml"
                 )
                 if os.path.exists(fixed_model_xml):
-                    gin.bind_parameter("RefConfig.fixed_model_xml_path", fixed_model_xml)
+                    gin.bind_parameter(
+                        "RefConfig.fixed_model_xml_path", fixed_model_xml
+                    )
             if controller_dt is not None:
                 gin.bind_parameter("RefConfig.dt", float(controller_dt))
 
@@ -254,10 +256,7 @@ class CompliancePolicy:
             np.float32
         )
 
-    def update_pose_command_from_obs(
-        self, obs: Any, x_obs: npt.NDArray[np.float32]
-    ) -> None:
-        del obs
+    def update_pose_command_from_obs(self, x_obs: npt.NDArray[np.float32]) -> None:
         if self.pose_command is None:
             self.pose_command = x_obs.copy()
 
@@ -313,7 +312,9 @@ class CompliancePolicy:
             motor_torque_arr = np.asarray(motor_torques, dtype=np.float32)
 
         if qpos is None:
-            qpos_arr = np.asarray(self.controller.wrench_sim.data.qpos, dtype=np.float32)
+            qpos_arr = np.asarray(
+                self.controller.wrench_sim.data.qpos, dtype=np.float32
+            )
         else:
             qpos_arr = np.asarray(qpos, dtype=np.float32)
 
@@ -337,7 +338,8 @@ class CompliancePolicy:
                 valid_idx = actuator_indices[
                     np.logical_and(
                         actuator_indices >= 0,
-                        actuator_indices < min(next_target.shape[0], state_ref_motor.shape[0]),
+                        actuator_indices
+                        < min(next_target.shape[0], state_ref_motor.shape[0]),
                     )
                 ]
                 next_target[valid_idx] = state_ref_motor[valid_idx]

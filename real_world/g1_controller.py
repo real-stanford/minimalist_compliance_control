@@ -17,22 +17,23 @@ from threading import Event, Lock, Thread
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
-
-import unitree_sdk2py  # type: ignore
-from unitree_sdk2py.core.channel import ( # type: ignore
+from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type: ignore
+    MotionSwitcherClient,
+)
+from unitree_sdk2py.core.channel import (  # type: ignore
     ChannelFactoryInitialize,
     ChannelPublisher,
-    ChannelSubscriber
+    ChannelSubscriber,
 )
 from unitree_sdk2py.idl.default import (  # type: ignore
     unitree_hg_msg_dds__LowCmd_,
-    unitree_hg_msg_dds__LowState_
+    unitree_hg_msg_dds__LowState_,
 )
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_ as LowCmdHG  # type: ignore
-from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_ as LowStateHG  # type: ignore
-from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient  # type: ignore
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import (  # type: ignore
+    LowState_ as LowStateHG,
+)
 from unitree_sdk2py.utils.crc import CRC  # type: ignore
-
 
 # Unitree HG low-level body joint order (29 DoF, no dexterous hands).
 G1_BODY_JOINT_NAMES: Tuple[str, ...] = (
@@ -355,7 +356,6 @@ class G1Control:
         return list(range(len(self.actuator_names)))
 
     def get_state(self, retries: int = 0) -> Dict[str, List[float]]:
-        del retries
         if not self._initialized:
             raise RuntimeError("G1 controller not initialized.")
 
@@ -402,7 +402,7 @@ class G1Control:
         self._last_pos[:] = vec.astype(np.float32)
 
     def set_vel(self, vel_vec: Sequence[float]) -> None:
-        del vel_vec
+        pass
 
     def set_pd(self, kp_vec: Sequence[float], kd_vec: Sequence[float]) -> None:
         kp_arr = np.asarray(kp_vec, dtype=np.float32).reshape(-1)
@@ -440,15 +440,14 @@ def create_controllers(
     port_pattern: str,
     kp: Sequence[float],
     kd: Sequence[float],
-    ki: Sequence[float],
-    zero_pos: Sequence[float],
-    control_mode: Sequence[str],
-    baudrate: int,
-    return_delay: int,
+    ki: Sequence[float] | None = None,
+    zero_pos: Sequence[float] | None = None,
+    control_mode: Sequence[str] | None = None,
+    baudrate: int = 0,
+    return_delay: int = 0,
     actuator_names: Sequence[str] | None = None,
     control_dt: float = 0.02,
 ) -> List[G1Control]:
-    del ki, zero_pos, control_mode, baudrate, return_delay
     interface = (
         str(port_pattern).strip() or str(os.environ.get("G1_NET_IFACE", "")).strip()
     )
@@ -489,7 +488,7 @@ def get_motor_states(
     for i, ctrl in enumerate(controllers):
         key = f"controller_{i}"
         try:
-            out[key] = ctrl.get_state(retries=retries)
+            out[key] = ctrl.get_state()
         except Exception:
             out[key] = dict(empty)
     return out
@@ -498,7 +497,6 @@ def get_motor_states(
 def get_motor_current_limits(
     controllers: Sequence[G1Control], retries: int = 0
 ) -> Dict[str, List[float]]:
-    del retries
     return {
         f"controller_{i}": [0.0] * len(ctrl.actuator_names)
         for i, ctrl in enumerate(controllers)
@@ -531,19 +529,19 @@ def set_motor_pd(
 def set_motor_cur(
     controllers: Sequence[G1Control], cur_vecs: Sequence[Sequence[float]]
 ) -> None:
-    del controllers, cur_vecs
+    pass
 
 
 def set_motor_pwm(
     controllers: Sequence[G1Control], pwm_vecs: Sequence[Sequence[float]]
 ) -> None:
-    del controllers, pwm_vecs
+    pass
 
 
 def set_motor_control_mode(
     controllers: Sequence[G1Control], mode_vecs: Sequence[Sequence[str]]
 ) -> None:
-    del controllers, mode_vecs
+    pass
 
 
 def disable_motors(controllers: Sequence[G1Control]) -> None:
