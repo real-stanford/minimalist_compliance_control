@@ -189,6 +189,8 @@ class G1Control:
         self.mode_machine = 0
         self._connected = False
         self._initialized = False
+        self._last_state_tick = 0
+        self._last_state_rx_time = 0.0
 
         self._last_pos = np.zeros(n, dtype=np.float32)
         self._last_vel = np.zeros(n, dtype=np.float32)
@@ -231,10 +233,13 @@ class G1Control:
             self._motion_switcher = None
 
     def _low_state_handler(self, msg: LowStateHG) -> None:
+        now = float(time.monotonic())
         with self.lock:
             self.low_state = msg
             if hasattr(msg, "mode_machine"):
                 self.mode_machine = int(msg.mode_machine)
+            self._last_state_tick = int(getattr(msg, "tick", self._last_state_tick))
+            self._last_state_rx_time = now
 
     def _start_tx_thread(self) -> None:
         if self._tx_thread is not None and self._tx_thread.is_alive():
@@ -273,6 +278,11 @@ class G1Control:
                     "G1_NET_IFACE, and confirm the Unitree low-level service is running."
                 )
             time.sleep(self.control_dt)
+
+    def get_latest_sample(self) -> tuple[int, float]:
+        """Return latest received lowstate tick and local monotonic receive time."""
+        with self.lock:
+            return int(self._last_state_tick), float(self._last_state_rx_time)
 
     def _send_cmd(self) -> None:
         if self.lowcmd_publisher_ is None:
@@ -348,6 +358,7 @@ class G1Control:
         del retries
         if not self._initialized:
             raise RuntimeError("G1 controller not initialized.")
+
         self._refresh_cache()
         zeros = np.zeros(len(self.actuator_names), dtype=np.float32)
         return {

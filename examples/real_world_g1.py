@@ -175,10 +175,16 @@ class RealWorldG1(BaseSim):
         qvel = np.zeros(int(self.model.nv), dtype=np.float32)
         qvel[self._qvel_adr] = motor_vel
 
+        obs_time = float(time.monotonic())
+        if self.controllers and hasattr(self.controllers[0], "get_latest_sample"):
+            _, rx_time = self.controllers[0].get_latest_sample()
+            if rx_time > 0.0:
+                obs_time = float(rx_time)
+
         rot = R.from_quat(self._last_quat_wxyz, scalar_first=True)
         return Obs(
             ang_vel=self._last_gyro.copy(),
-            time=float(time.monotonic()),
+            time=obs_time,
             motor_pos=motor_pos.copy(),
             motor_vel=motor_vel.copy(),
             motor_tor=self._last_motor_tor.copy(),
