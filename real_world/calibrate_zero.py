@@ -12,6 +12,8 @@ from typing import Any
 import numpy as np
 import yaml
 
+from minimalist_compliance_control.utils import load_merged_motor_config
+
 
 def _repo_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -27,30 +29,6 @@ def _load_yaml_dict(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return data if isinstance(data, dict) else {}
-
-
-def _deep_update(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
-    for key, value in update.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            _deep_update(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
-def _merge_motor_config(robot: str) -> tuple[dict[str, Any], str]:
-    default_cfg = _resolve_repo_path("descriptions/default.yml")
-    robot_cfg = _resolve_repo_path(f"descriptions/{robot}/robot.yml")
-    motors_cfg = _resolve_repo_path(f"descriptions/{robot}/motors.yml")
-
-    if not os.path.exists(robot_cfg):
-        raise FileNotFoundError(f"Robot config not found: {robot_cfg}")
-
-    config = _load_yaml_dict(default_cfg)
-    _deep_update(config, _load_yaml_dict(robot_cfg))
-    if os.path.exists(motors_cfg):
-        _deep_update(config, _load_yaml_dict(motors_cfg))
-    return config, motors_cfg
 
 
 def _select_robot_xml_path(robot: str) -> str:
@@ -133,7 +111,16 @@ def calibrate_zero(robot: str, parts: list[str]) -> None:
     if "toddlerbot" not in robot.lower():
         raise ValueError("This calibration script is toddlerbot-specific.")
 
-    merged_config, motors_cfg_path = _merge_motor_config(robot)
+    default_cfg = _resolve_repo_path("descriptions/default.yml")
+    robot_cfg = _resolve_repo_path(f"descriptions/{robot}/robot.yml")
+    motors_cfg_path = _resolve_repo_path(f"descriptions/{robot}/motors.yml")
+    if not os.path.exists(robot_cfg):
+        raise FileNotFoundError(f"Robot config not found: {robot_cfg}")
+    merged_config = load_merged_motor_config(
+        default_path=default_cfg,
+        robot_path=robot_cfg,
+        motors_path=motors_cfg_path if os.path.exists(motors_cfg_path) else None,
+    )
     xml_path = _select_robot_xml_path(robot)
     motor_ordering, motor_kp, motor_kd, motor_ki = _build_motor_ordering(
         merged_config, xml_path

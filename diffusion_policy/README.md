@@ -1,37 +1,20 @@
-# Compliance DP Example
+# Compliance DP Components
 
 ## Purpose
 
-This example runs a standalone diffusion-based compliance policy and outputs
-`pose_command` and `command_matrix` compatible with the package compliance layout.
+This folder contains diffusion-policy model components used by
+`policy/compliance_dp.py`. The policy outputs `pose_command` and
+`command_matrix` compatible with the compliance controller layout.
 
-## Usage
-
-Install required dependencies:
+## Required Dependencies
 
 ```bash
 pip install torch torchvision diffusers opencv-python joblib
 ```
 
-Replay mode:
+## Replay Input Conventions
 
-```bash
-python examples/run_policy.py --policy compliance_dp --robot toddlerbot -- \
-  --ckpt /path/to/best_ckpt.pth \
-  --num-sites 2 \
-  --replay-npz /path/to/replay_data.npz \
-  --save /tmp/compliance_dp_out.npz
-```
-
-Dummy mode:
-
-```bash
-python examples/run_policy.py --policy compliance_dp --robot toddlerbot -- \
-  --ckpt /path/to/best_ckpt.pth \
-  --num-sites 2
-```
-
-Replay file keys:
+Accepted replay keys:
 
 - required image key: `image` / `images` / `rgb` / `camera`
 - required pose key: `x_obs` / `pose` / `ee_pose`

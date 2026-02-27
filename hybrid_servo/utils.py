@@ -49,3 +49,26 @@ def sync_compliance_state_to_current_pose(
     ref_state.qpos = np.asarray(data.qpos, dtype=np.float32).copy()
     ref_state.motor_pos = np.asarray(motor_pos, dtype=np.float32).copy()
     controller._last_state = ref_state
+
+
+def get_ground_truth_wrenches(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    site_names: tuple[str, ...],
+) -> dict[str, np.ndarray]:
+    """Return per-site body cfrc_ext as [force(3), torque(3)]."""
+    mujoco.mj_rnePostConstraint(model, data)
+    wrenches: dict[str, np.ndarray] = {}
+    for site_name in site_names:
+        site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+        if site_id < 0:
+            continue
+        body_id = int(model.site_bodyid[site_id])
+        raw_spatial = np.asarray(data.cfrc_ext[body_id], dtype=np.float32).reshape(-1)
+        if raw_spatial.shape[0] >= 6:
+            wrenches[site_name] = np.concatenate(
+                [raw_spatial[3:6], raw_spatial[0:3]], axis=0
+            ).astype(np.float32, copy=False)
+        else:
+            wrenches[site_name] = np.zeros(6, dtype=np.float32)
+    return wrenches

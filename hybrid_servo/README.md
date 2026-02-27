@@ -1,34 +1,22 @@
-# Model-Based Example
+# Model-Based Components
 
 ## Purpose
 
-This example runs a standalone model-based compliance policy with the phase flow:
-`prep -> kneel -> approach -> model_based`.
+This folder contains OCHS/HFVC model-based components used by the model-based
+compliance policy (`prep -> kneel -> approach -> model_based`).
 
-## Usage
+## Integration Notes
 
-Run policy:
+- Primary integration target:
+  - `policy/compliance_model_based_toddlerbot.py`
+  - `policy/compliance_model_based_leap.py`
+- Keyboard commands used by the model-based policies:
+  - `c`: reverse direction
+  - `l`: left-hand mode
+  - `r`: right-hand mode
+  - `b`: both-hands mode
 
-```bash
-python examples/run_policy.py --policy compliance_model_based --robot toddlerbot
-```
-
-On macOS MuJoCo viewer:
-
-```bash
-mjpython examples/run_policy.py --policy compliance_model_based --robot toddlerbot
-```
-
-Keyboard control (focus the same terminal running the policy):
-
-Keyboard commands:
-
-- `c`: reverse direction
-- `l`: left-hand mode
-- `r`: right-hand mode
-- `b`: both-hands mode
-
-Optional extra dependencies:
+## Optional Dependencies
 
 ```bash
 pip install qpsolvers osqp sympy

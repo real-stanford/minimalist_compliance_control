@@ -1,6 +1,6 @@
 """Unitree G1 controller wrapper with a Dynamixel-like surface API.
 
-This module mirrors the functions used by examples.real_world:
+This module mirrors the functions used by real_world.real_world_dynamixel:
 - create_controllers(...)
 - initialize(controllers)
 - get_motor_ids(controllers)

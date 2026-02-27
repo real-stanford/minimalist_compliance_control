@@ -1,50 +1,34 @@
-# Compliance VLM Example
+# Compliance VLM Components
 
 ## Purpose
 
-This example runs a standalone VLM-guided compliance policy with mode switching
-(`waiting`, `wiping`, `drawing`) and outputs package-compatible `command_matrix`.
+This folder contains VLM affordance/depth/server components used by
+`policy/compliance_vlm.py` for mode-driven compliance (`waiting`, `wiping`,
+`drawing`).
 
-## Usage
-
-Install dependencies:
+## Dependencies
 
 ```bash
 pip install numpy scipy opencv-python joblib pyzmq requests open3d pycocotools
 ```
 
-Set API key for predictor backend:
+## Provider Keys
 
-```bash
-export GOOGLE_API_KEY=...
-# or export OPENAI_API_KEY=...
-```
+Set one of:
 
-Place robot camera config YAMLs in `assets/`:
+- `GOOGLE_API_KEY`
+- `OPENAI_API_KEY`
+
+## Camera Config Assets
+
+Place camera YAML files in `assets/`:
 
 - `toddlerbot_camera.yml`
 - `leap_camera.yml`
 
-Replay mode:
+## Replay Input Conventions
 
-```bash
-python examples/run_policy.py --policy compliance_vlm --robot toddlerbot -- \
-  --robot-name toddlerbot_2xm \
-  --mode drawing \
-  --object "star" \
-  --replay-npz /path/to/replay_data.npz \
-  --save /tmp/compliance_vlm_out.npz
-```
-
-Dummy mode:
-
-```bash
-python examples/run_policy.py --policy compliance_vlm --robot toddlerbot -- \
-  --robot-name toddlerbot_2xm \
-  --mode waiting
-```
-
-Replay file keys:
+Accepted replay keys:
 
 - required left image: `left_image` / `image` / `images` / `rgb` / `camera`
 - required pose: `x_obs` / `pose` / `ee_pose`

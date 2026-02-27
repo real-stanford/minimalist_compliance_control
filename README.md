@@ -2,14 +2,52 @@
 
 A lightweight package for MuJoCo-based compliance control and wrench estimation.
 
+## Project Links
+
+- Project page: https://minimalist-compliance-control.github.io/
+- Paper: coming soon (project-page `Paper` button currently has no public URL)
+- Tweet/X: coming soon (project-page `Tweet` button currently has no public URL)
+
 ## Overview
 
-`minimalist_compliance_control` provides a minimal, reusable control stack with:
+`minimalist_compliance_control` provides:
 
 - wrench simulation and Jacobian utilities,
 - online wrench estimation,
 - compliance reference integration,
-- a unified controller interface.
+- unified policy/controller orchestration.
+
+From the project page: the method estimates external wrenches from motor
+current/voltage and Jacobians, requires no force sensors or learning, and is
+plug-and-play with VLM, imitation, and model-based policies across tasks like
+wiping, drawing, scooping, and in-hand manipulation.
+
+## Teaser Video
+
+<video src="assets/teaser_release.mp4" controls muted loop playsinline width="100%"></video>
+
+Direct file: [assets/teaser_release.mp4](assets/teaser_release.mp4)
+
+## Citation
+
+Until the paper URL is published on the project page, you can cite the project
+page entry:
+
+```bibtex
+@misc{shi2026minimalist_compliance_control,
+  title        = {Minimalist Compliance Control},
+  author       = {Shi, Haochen and Hu, Songbo and Hou, Yifan and Wang, Weizhuo and Liu, C. Karen and Song, Shuran},
+  year         = {2026},
+  howpublished = {\url{https://minimalist-compliance-control.github.io/}},
+  note         = {Project page}
+}
+```
+
+## Related Projects
+
+- ToddlerBot: https://toddlerbot.github.io/
+- Robot Trains Robot: https://robot-trains-robot.github.io/
+- Locomotion Beyond Feet: https://locomotion-beyond-feet.github.io/
 
 ## Installation
 
@@ -19,68 +57,89 @@ conda activate mcc
 pip install -e .
 ```
 
-For example stacks (model-based / diffusion-policy / VLM):
+For policy stacks (model-based / diffusion-policy / VLM):
 
 ```bash
-pip install -e ".[examples]"
+pip install -e ".[policy]"
 ```
 
-To include the Dynamixel C++ backend as well:
+To include the Dynamixel C++ backend:
 
 ```bash
-pip install -e ".[examples]" --config-settings=cmake.define.BUILD_DYNAMIXEL=ON
+pip install -e ".[policy]" --config-settings=cmake.define.BUILD_DYNAMIXEL=ON
 ```
 
-Installed CLI entrypoints:
+## Policy Scripts
 
-```bash
-mcc-run-policy --policy compliance --robot leap --sim mujoco --vis
-mcc-run-policy --policy compliance_model_based --robot toddlerbot
-mcc-run-policy --policy compliance_model_based --robot leap -- --scene-xml descriptions/leap_hand/scene_object_fixed.xml
-mcc-run-policy --policy compliance_dp --robot toddlerbot -- --help
-mcc-run-policy --policy compliance_vlm --robot toddlerbot -- --help
-```
+Complete coverage of files under `policy/`:
 
-## Diffusion Policy Checkpoint
+- `policy/run_policy.py`
+  - Main runner for policy + sim/hardware backends.
+  - Run with CLI entrypoint:
+  ```bash
+  mcc-run-policy --policy compliance --robot leap --sim mujoco --vis view
+  mcc-run-policy --policy compliance_model_based --robot toddlerbot --sim mujoco --vis view
+  mcc-run-policy --policy compliance_dp --robot toddlerbot --sim mujoco --ckpt /path/to/ckpt.pth
+  mcc-run-policy --policy compliance_vlm --robot toddlerbot --sim mujoco --object "star" --site-names "right_hand_center"
+  mcc-run-policy --policy compliance --robot toddlerbot --sim real --vis none
+  mcc-run-policy --policy compliance --robot arx --sim real --vis none
+  mcc-run-policy --policy compliance --robot g1 --sim real --vis none --ip en0
+  ```
+  - Equivalent direct script invocation:
+  ```bash
+  python policy/run_policy.py --policy compliance --robot leap --sim mujoco --vis view
+  ```
 
-Download and unzip the diffusion policy checkpoint under `results/`:
+- `policy/run_affordance_prediction.py`
+  - Offline affordance prediction + EE pose planning from stereo images in `assets/`.
+  - Example:
+  ```bash
+  python policy/run_affordance_prediction.py --robot toddlerbot --task wipe --provider gemini --model gemini-2.5-pro
+  python policy/run_affordance_prediction.py --robot leap --task draw --site rf_tip if_tip --object "star"
+  ```
 
-```bash
-cd results
-gdown --fuzzy https://drive.google.com/file/d/1c-NxnbCkwnZ9I5qnSQABOluMff5IX23k/view?usp=drive_link && unzip "$(ls -t *.zip | head -n 1)"
-```
+- `policy/plot_log_data.py`
+  - Plot `log_data.lz4` produced by `run_policy.py`.
+  - Example:
+  ```bash
+  python policy/plot_log_data.py --log results/<run_dir>/log_data.lz4
+  ```
 
-## Foundation Stereo Engine
+- `policy/compliance.py`
+  - Base compliance policy implementation.
+  - Loaded by `run_policy.py` when `--policy compliance`.
 
-The foundation stereo server requires the TensorRT engine file at:
+- `policy/compliance_model_based.py`
+  - Model-based policy selector wrapper.
+  - Loaded by `run_policy.py` when `--policy compliance_model_based`.
 
-- `ckpts/foundation_stereo_vitl_480x640_20.engine`
+- `policy/compliance_model_based_leap.py`
+  - LEAP-specific model-based implementation.
+  - Used by `policy/compliance_model_based.py` for `--robot leap`.
 
-Download it with:
+- `policy/compliance_model_based_toddlerbot.py`
+  - Toddlerbot-specific model-based implementation.
+  - Used by `policy/compliance_model_based.py` for `--robot toddlerbot`.
 
-```bash
-mkdir -p ckpts
-cd ckpts
-gdown --fuzzy "https://drive.google.com/file/d/1fHppa6f15CLT8LnDXHmoAMfA2hoUsDrC/view?usp=drive_link"
-```
+- `policy/compliance_dp.py`
+  - Diffusion-policy compliance implementation.
+  - Loaded by `run_policy.py` when `--policy compliance_dp`.
 
-## SAM3 Setup
+- `policy/compliance_vlm.py`
+  - VLM-guided compliance implementation.
+  - Loaded by `run_policy.py` when `--policy compliance_vlm`.
 
-For SAM3 installation, follow the official instructions from:
+- `policy/__init__.py`
+  - Package marker.
 
-- https://github.com/facebookresearch/sam3
+## Assets And Checkpoints
 
-## API Key
-
-When using the Gemini-backed affordance/compliance pipeline, set:
-
-- `GOOGLE_API_KEY`
-
-Example:
-
-```bash
-export GOOGLE_API_KEY="your_api_key_here"
-```
+- Diffusion policy checkpoint: place under `results/`.
+- Foundation stereo engine path:
+  - `ckpts/foundation_stereo_vitl_480x640_20.engine`
+- API keys for affordance/compliance providers:
+  - `GOOGLE_API_KEY`
+  - `OPENAI_API_KEY` (if using OpenAI provider)
 
 ## Core Modules
 
@@ -90,12 +149,12 @@ export GOOGLE_API_KEY="your_api_key_here"
 - `minimalist_compliance_control/compliance_ref.py`
 - `minimalist_compliance_control/ik_solvers.py`
 
-## Examples
+## Related Folders
 
-Example usage is documented under:
-
-- `hybrid_servo/`
-- `diffusion_policy/`
-- `vlm/`
-
-Hardware support modules are in `real_world/` (Dynamixel, IMU, camera).
+- `policy/`: policy implementations and policy utilities.
+- `sim/`: simulation adapters (`base_sim.py`, `sim.py`) used by `run_policy.py`.
+- `hybrid_servo/`: model-based algorithms and utilities.
+- `diffusion_policy/`: diffusion model components.
+- `vlm/`: VLM affordance/depth/servers.
+- `real_world/`: hardware adapters (`real_world_dynamixel.py`,
+  `real_world_arx.py`, `real_world_g1.py`) and IMU/camera interfaces.
