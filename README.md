@@ -85,6 +85,8 @@ Complete coverage of files under `policy/`:
   mcc-run-policy --policy compliance --robot arx --sim real --vis none
   mcc-run-policy --policy compliance --robot g1 --sim real --vis none --ip en0
   ```
+  - **Important:** For best performance, make sure your policy loop can sustain
+    `50 Hz`.
   - Equivalent direct script invocation:
   ```bash
   python policy/run_policy.py --policy compliance --robot leap --sim mujoco --vis view

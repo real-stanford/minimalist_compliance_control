@@ -295,7 +295,12 @@ def _parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
             "compliance_vlm",
         ],
     )
-    parser.add_argument("--ip", type=str, default="")
+    parser.add_argument(
+        "--ip",
+        type=str,
+        default="en9",
+        help="Network interface for real robots (e.g., en0/eth0).",
+    )
     parser.add_argument("--ckpt", type=str, default="")
     parser.add_argument("--object", type=str, default="black ink. whiteboard. vase")
     parser.add_argument("--site-names", type=str, default="")
@@ -311,7 +316,10 @@ def _parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(args: Sequence[str] | None = None) -> None:
     parsed = _parse_args(args)
-    if str(parsed.robot).strip().lower() == "g1" and str(parsed.sim).strip().lower() == "real":
+    if (
+        str(parsed.robot).strip().lower() == "g1"
+        and str(parsed.sim).strip().lower() == "real"
+    ):
         # Register G1 gin configurables before parsing the gin file.
         from real_world.real_world_g1 import G1GainConfig  # noqa: F401
 
