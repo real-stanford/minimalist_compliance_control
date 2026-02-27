@@ -311,6 +311,10 @@ def _parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(args: Sequence[str] | None = None) -> None:
     parsed = _parse_args(args)
+    if str(parsed.robot).strip().lower() == "g1" and str(parsed.sim).strip().lower() == "real":
+        # Register G1 gin configurables before parsing the gin file.
+        from real_world.real_world_g1 import G1GainConfig  # noqa: F401
+
     if str(parsed.policy) == "compliance_vlm" and str(parsed.robot) in {
         "toddlerbot",
         "leap",

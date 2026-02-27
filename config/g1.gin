@@ -78,10 +78,14 @@ RefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 RefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 # Compliance policy fields
-ComplianceConfig.kp_pos = 400.0
-ComplianceConfig.kp_rot = 40.0
+ComplianceConfig.kp_pos = 200.0
+ComplianceConfig.kp_rot = 20.0
 ComplianceConfig.use_compliance = True
 ComplianceConfig.perturb_force_max = 10.0
+
+# G1 real-world motor PD gains
+G1GainConfig.kp = 100.0
+G1GainConfig.kd = 1.0
 
 # Motor config paths
 MotorConfigPaths.default_config_path = "descriptions/default.yml"

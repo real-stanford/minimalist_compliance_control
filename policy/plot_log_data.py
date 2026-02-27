@@ -119,6 +119,61 @@ def _plot_field(
     plt.close(fig)
 
 
+def _plot_action_vs_pos(
+    x: np.ndarray,
+    action: np.ndarray,
+    motor_pos: np.ndarray,
+    motor_names: list[str],
+    save_path: str,
+) -> None:
+    n_motor = int(min(action.shape[1], motor_pos.shape[1]))
+    if n_motor <= 0:
+        return
+
+    n_cols = min(4, max(1, n_motor))
+    n_rows = int(math.ceil(n_motor / n_cols))
+    fig_w = max(12, 3.0 * n_cols)
+    fig_h = max(3, 2.0 * n_rows)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_w, fig_h), sharex=True)
+    axes_arr = np.atleast_1d(axes).reshape(-1)
+
+    for idx in range(n_motor):
+        ax = axes_arr[idx]
+        ax.plot(x, action[:, idx], linewidth=1.0, label="action")
+        ax.plot(x, motor_pos[:, idx], linewidth=1.0, label="motor_pos")
+        if idx < len(motor_names):
+            ax.set_title(motor_names[idx], fontsize=8)
+        else:
+            ax.set_title(f"motor_{idx:02d}", fontsize=8)
+        if idx == 0:
+            ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.25)
+
+    for idx in range(n_motor, axes_arr.shape[0]):
+        axes_arr[idx].axis("off")
+
+    fig.suptitle("action_vs_pos")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.98))
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_loop_dt(time: np.ndarray, save_path: str) -> None:
+    if time.shape[0] < 2:
+        return
+    x = time[1:]
+    y = np.diff(time)
+    fig, ax = plt.subplots(1, 1, figsize=(10, 4), sharex=True)
+    ax.plot(x, y, linewidth=1.0)
+    ax.set_title("loop_dt")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("dt (s)")
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot motor data from log_data.lz4")
     parser.add_argument("--log", type=str, required=True, help="Path to log_data.lz4")
@@ -172,6 +227,38 @@ def main() -> None:
 
         save_path = os.path.join(output_dir, f"{field_name}.png")
         _plot_field(x=x, y=y, motor_names=names, title=field_name, save_path=save_path)
+        print(f"[plot_log_data] wrote {save_path}")
+        num_plots += 1
+
+    action = _to_2d(payload.get("action"))
+    motor_pos = _to_2d(obs.get("motor_pos"))
+    if action is not None and motor_pos is not None:
+        n_samples = min(action.shape[0], motor_pos.shape[0])
+        if n_samples > 0:
+            action = action[:n_samples]
+            motor_pos = motor_pos[:n_samples]
+            if time.shape[0] >= n_samples:
+                x = time[:n_samples]
+            else:
+                x = np.arange(n_samples, dtype=np.float64)
+            if not motor_names or len(motor_names) < min(action.shape[1], motor_pos.shape[1]):
+                names = [f"motor_{i:02d}" for i in range(min(action.shape[1], motor_pos.shape[1]))]
+            else:
+                names = motor_names
+            save_path = os.path.join(output_dir, "action_vs_pos.png")
+            _plot_action_vs_pos(
+                x=x,
+                action=action,
+                motor_pos=motor_pos,
+                motor_names=names,
+                save_path=save_path,
+            )
+            print(f"[plot_log_data] wrote {save_path}")
+            num_plots += 1
+
+    if time.shape[0] >= 2:
+        save_path = os.path.join(output_dir, "loop_dt.png")
+        _plot_loop_dt(time=time, save_path=save_path)
         print(f"[plot_log_data] wrote {save_path}")
         num_plots += 1
 

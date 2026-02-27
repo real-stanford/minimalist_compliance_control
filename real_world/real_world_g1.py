@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 from typing import Dict
 
+import gin
 import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from sim.base_sim import BaseSim, Obs
 from real_world import g1_controller
+
+
+@gin.configurable
+@dataclass
+class G1GainConfig:
+    kp: float = 40.0
+    kd: float = 1.0
 
 
 class RealWorldG1(BaseSim):
@@ -50,85 +59,9 @@ class RealWorldG1(BaseSim):
         elif int(self.model.nq) >= 7:
             self._qpos_base[3] = 1.0
 
-        kp = np.ones(int(self.model.nu), dtype=np.float32) * 40.0
-        kd = np.ones(int(self.model.nu), dtype=np.float32) * 1.0
-        g1_default_kp = np.asarray(
-            [
-                60,
-                60,
-                60,
-                100,
-                40,
-                40,  # legs
-                60,
-                60,
-                60,
-                100,
-                40,
-                40,  # legs
-                60,
-                40,
-                40,  # waist
-                40,
-                40,
-                40,
-                40,
-                40,
-                40,
-                40,  # left arm
-                40,
-                40,
-                40,
-                40,
-                40,
-                40,
-                40,  # right arm
-            ],
-            dtype=np.float32,
-        )
-        g1_default_kd = np.asarray(
-            [
-                1,
-                1,
-                1,
-                2,
-                1,
-                1,  # legs
-                1,
-                1,
-                1,
-                2,
-                1,
-                1,  # legs
-                1,
-                1,
-                1,  # waist
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,  # left arm
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,  # right arm
-            ],
-            dtype=np.float32,
-        )
-        default_gain_by_joint = {
-            name: (float(g1_default_kp[i]), float(g1_default_kd[i]))
-            for i, name in enumerate(g1_controller.G1_BODY_JOINT_NAMES)
-        }
-        for i, name in enumerate(self.motor_ordering):
-            gains = default_gain_by_joint.get(str(name))
-            if gains is None:
-                continue
-            kp[i], kd[i] = gains
+        gain_cfg = G1GainConfig()
+        kp = np.ones(int(self.model.nu), dtype=np.float32) * float(gain_cfg.kp)
+        kd = np.ones(int(self.model.nu), dtype=np.float32) * float(gain_cfg.kd)
 
         interface = str(net_if).strip()
         self.controller = g1_controller
@@ -214,8 +147,6 @@ class RealWorldG1(BaseSim):
 
         qpos = self._qpos_base.copy()
         qpos[self._qpos_adr] = motor_pos
-        if int(self.model.nq) >= 7:
-            qpos[3:7] = self._last_quat_wxyz
         qvel = np.zeros(int(self.model.nv), dtype=np.float32)
         qvel[self._qvel_adr] = motor_vel
 
