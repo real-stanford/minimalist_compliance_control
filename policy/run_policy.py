@@ -10,6 +10,9 @@ import argparse
 import datetime as dt
 import json
 import os
+import platform
+import shutil
+import sys
 import time
 from dataclasses import dataclass, fields
 from typing import Any, Optional, Sequence
@@ -314,8 +317,40 @@ def _parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(args=args)
 
 
+def _maybe_reexec_with_mjpython(
+    parsed: argparse.Namespace, args: Sequence[str] | None = None
+) -> None:
+    """On macOS, ensure MuJoCo viewer runs under mjpython when visualization is enabled."""
+    if platform.system() != "Darwin":
+        return
+    if str(parsed.sim) != "mujoco" or str(parsed.vis) == "none":
+        return
+    if "mjpython" in os.path.basename(sys.executable).lower():
+        return
+    if os.environ.get("MCC_MJPYTHON_REEXEC") == "1":
+        return
+
+    mjpython_path = shutil.which("mjpython")
+    if not mjpython_path:
+        raise RuntimeError(
+            "macOS MuJoCo viewer requires mjpython, but `mjpython` was not found in PATH. "
+            "Install MuJoCo Python tools and run: "
+            "`mjpython -m policy.run_policy --sim mujoco --vis view ...`"
+        )
+
+    raw_args = list(args) if args is not None else list(sys.argv[1:])
+    env = os.environ.copy()
+    env["MCC_MJPYTHON_REEXEC"] = "1"
+    os.execvpe(
+        mjpython_path,
+        [mjpython_path, "-m", "policy.run_policy", *raw_args],
+        env,
+    )
+
+
 def main(args: Sequence[str] | None = None) -> None:
     parsed = _parse_args(args)
+    _maybe_reexec_with_mjpython(parsed, args=args)
     if (
         str(parsed.robot).strip().lower() == "g1"
         and str(parsed.sim).strip().lower() == "real"
