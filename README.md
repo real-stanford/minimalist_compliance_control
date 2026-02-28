@@ -6,6 +6,7 @@
 
 A lightweight package for MuJoCo-based compliance control and wrench estimation.
 
+From the project page: the method estimates external wrenches from motor current/voltage and Jacobians, requires no force sensors or learning, and is plug-and-play with VLM, imitation, and model-based policies across tasks like wiping, drawing, scooping, and in-hand manipulation.
 ## Overview
 
 `minimalist_compliance_control` provides:
@@ -15,31 +16,11 @@ A lightweight package for MuJoCo-based compliance control and wrench estimation.
 - compliance reference integration,
 - unified policy/controller orchestration.
 
-From the project page: the method estimates external wrenches from motor
-current/voltage and Jacobians, requires no force sensors or learning, and is
-plug-and-play with VLM, imitation, and model-based policies across tasks like
-wiping, drawing, scooping, and in-hand manipulation.
-
 ## Teaser Video
 
 <video src="assets/teaser_release.mp4" controls muted loop playsinline width="100%"></video>
 
 Direct file: [assets/teaser_release.mp4](assets/teaser_release.mp4)
-
-## Citation
-
-Until the paper URL is published on the project page, you can cite the project
-page entry:
-
-```bibtex
-@misc{shi2026minimalist_compliance_control,
-  title        = {Minimalist Compliance Control},
-  author       = {Shi, Haochen and Hu, Songbo and Hou, Yifan and Wang, Weizhuo and Liu, C. Karen and Song, Shuran},
-  year         = {2026},
-  howpublished = {\url{https://minimalist-compliance-control.github.io/}},
-  note         = {Project page}
-}
-```
 
 ## Related Projects
 
@@ -158,3 +139,19 @@ Complete coverage of files under `policy/`:
 - `vlm/`: VLM affordance/depth/servers.
 - `real_world/`: hardware adapters (`real_world_dynamixel.py`,
   `real_world_arx.py`, `real_world_g1.py`) and IMU/camera interfaces.
+
+## Citation
+Until the paper URL is published on the project page, you can cite the project page entry:
+```bibtex
+@misc{shi2026minimalist_compliance_control,
+  title        = {Minimalist Compliance Control},
+  author       = {Shi, Haochen and Hu, Songbo and Hou, Yifan and Wang, Weizhuo and Liu, C. Karen and Song, Shuran},
+  year         = {2026},
+  howpublished = {\url{https://minimalist-compliance-control.github.io/}},
+  note         = {Project page}
+}
+```
+
+## License
+
+This project is released under the [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE).
