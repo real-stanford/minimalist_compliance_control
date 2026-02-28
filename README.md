@@ -1,13 +1,12 @@
 # minimalist_compliance_control
 
-**[Website](https://minimalist-compliance-control.github.io/)** |
+**[Project Page](https://minimalist-compliance-control.github.io/)** |
 **Paper** (coming soon) |
-**Tweet** (coming soon)
+**Tweet/X** (coming soon)
 
 A lightweight package for MuJoCo-based compliance control and wrench estimation.
 
 From the project page: the method estimates external wrenches from motor current/voltage and Jacobians, requires no force sensors or learning, and is plug-and-play with VLM, imitation, and model-based policies across tasks like wiping, drawing, scooping, and in-hand manipulation.
-
 ## Overview
 
 `minimalist_compliance_control` provides:
@@ -25,9 +24,9 @@ Direct file: [assets/teaser_release.mp4](assets/teaser_release.mp4)
 
 ## Related Projects
 
-- ToddlerBot: https://toddlerbot.github.io/
-- Robot Trains Robot: https://robot-trains-robot.github.io/
-- Locomotion Beyond Feet: https://locomotion-beyond-feet.github.io/
+- [ToddlerBot](https://toddlerbot.github.io/)
+- [Robot Trains Robot](https://robot-trains-robot.github.io/)
+- [Locomotion Beyond Feet](https://locomotion-beyond-feet.github.io/)
 
 ## Installation
 
