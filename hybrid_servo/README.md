@@ -3,7 +3,7 @@
 ## Purpose
 
 This folder contains OCHS/HFVC model-based components used by the model-based
-compliance policy (`prep -> kneel -> approach -> model_based`).
+compliance policy (`prep -> kneel -> approach -> model_based -> mode switching`).
 
 ## Integration Notes
 
