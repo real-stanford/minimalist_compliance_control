@@ -151,7 +151,3 @@ Until the paper URL is published on the project page, you can cite the project p
   note         = {Project page}
 }
 ```
-
-## License
-
-This project is released under the [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE).
