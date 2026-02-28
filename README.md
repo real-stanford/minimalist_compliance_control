@@ -1,12 +1,10 @@
 # minimalist_compliance_control
 
+**[Project Page](https://minimalist-compliance-control.github.io/)** |
+**Paper** (coming soon) |
+**Tweet/X** (coming soon)
+
 A lightweight package for MuJoCo-based compliance control and wrench estimation.
-
-## Project Links
-
-- Project page: https://minimalist-compliance-control.github.io/
-- Paper: coming soon (project-page `Paper` button currently has no public URL)
-- Tweet/X: coming soon (project-page `Tweet` button currently has no public URL)
 
 ## Overview
 
@@ -45,9 +43,9 @@ page entry:
 
 ## Related Projects
 
-- ToddlerBot: https://toddlerbot.github.io/
-- Robot Trains Robot: https://robot-trains-robot.github.io/
-- Locomotion Beyond Feet: https://locomotion-beyond-feet.github.io/
+- [ToddlerBot](https://toddlerbot.github.io/)
+- [Robot Trains Robot](https://robot-trains-robot.github.io/)
+- [Locomotion Beyond Feet](https://locomotion-beyond-feet.github.io/)
 
 ## Installation
 

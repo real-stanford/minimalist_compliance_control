@@ -23,7 +23,3 @@ description](https://github.com/unitreerobotics/unitree_ros/tree/master/robots/g
 4. Add IMU sensor (gyro, accelero, framequat).
 5. Added stand keyframe.
 6. Added spotlight and tracking light.
-
-## License
-
-This model is released under a [BSD-3-Clause License](LICENSE).
