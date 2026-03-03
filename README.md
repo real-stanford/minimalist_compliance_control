@@ -2,7 +2,7 @@
 
 **[Project Page](https://minimalist-compliance-control.github.io/)** |
 **[Paper](https://arxiv.org/abs/2603.00913)** |
-**[Tweet/X]()**
+**[Tweet/X](https://x.com/HaochenShi74/status/2028726677749330388?s=20)**
 
 A lightweight package for MuJoCo-based compliance control and wrench estimation.
 
