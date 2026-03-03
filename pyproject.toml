@@ -1,0 +1,75 @@
+[build-system]
+requires = ["scikit-build-core", "pybind11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "minimalist_compliance_control"
+version = "0.1.0"
+description = "Minimal compliance control."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Haochen Shi"},
+  {name = "Songbo Hu"}
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "numpy>=1.23",
+  "scipy>=1.9",
+  "mujoco>=2.3.7",
+  "mink>=0.0.6",
+  "gin-config>=0.5.0",
+]
+
+[project.optional-dependencies]
+policy = [
+  "adafruit-circuitpython-bno08x",
+  "matplotlib",
+  "opencv-python",
+  "pyyaml",
+  "pyserial",
+  "torch",
+  "torchvision",
+  "diffusers",
+  "lz4",
+  "Jetson.GPIO",
+  "joblib",
+  "pyzmq",
+  "requests",
+  "open3d",
+  "pycocotools",
+  "moviepy",
+  "qpsolvers[osqp]",
+  "sympy",
+  "gdown",
+]
+
+[project.scripts]
+mcc-run-policy = "policy.run_policy:main"
+
+[tool.scikit-build]
+wheel.packages = [
+  "minimalist_compliance_control",
+  "config",
+  "policy",
+  "sim",
+  "hybrid_servo",
+  "diffusion_policy",
+  "vlm",
+  "descriptions",
+  "real_world",
+]
+build.verbose = true
+
+[tool.scikit-build.cmake.define]
+BUILD_DYNAMIXEL = "OFF"

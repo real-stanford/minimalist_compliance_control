@@ -1,0 +1,469 @@
+kinematics:
+    zero_pos: [0.0, 0.0, 0.315053]
+    home_pos_z_delta: -0.005892
+    torso_site_pos: [0.023, 0.0, 0.05]
+    waist_roll_coef: 0.29166667
+    waist_yaw_coef: 0.20833333
+    waist_roll_backlash: 0.03
+    waist_yaw_backlash: 0.001
+    gripper_gear_ratio: 0.012
+
+motors:
+    neck_yaw_drive:
+        motor: XC330
+        group: neck
+        zero_pos: 0
+        home_pos: 0
+        kp: 1500.0
+        kd: 0.0
+        ki: 0.0
+    neck_pitch_act:
+        motor: XC330
+        group: neck
+        zero_pos: 0
+        home_pos: 0
+        kp: 1500.0
+        kd: 0.0
+        ki: 0.0
+    waist_act_1:
+        motor: XC330
+        group: waist
+        zero_pos: 0
+        home_pos: 0
+        kp: 1500.0
+        kd: 0.0
+        ki: 0.0
+    waist_act_2:
+        motor: XC330
+        group: waist
+        zero_pos: 0
+        home_pos: 0
+        kp: 1500.0
+        kd: 0.0
+        ki: 0.0
+    left_hip_pitch:
+        motor: 2XC430
+        group: leg
+        zero_pos: 0
+        home_pos: -0.091312
+        kp: 2100.0
+        kd: 0.0
+        ki: 0.0
+    left_hip_roll:
+        motor: 2XC430
+        group: leg
+        zero_pos: 0
+        home_pos: 0
+        kp: 2100.0
+        kd: 0.0
+        ki: 0.0
+    left_hip_yaw_drive:
+        motor: XC330
+        group: leg
+        zero_pos: 0
+        home_pos: 0
+        kp: 1500.0
+        kd: 0.0
+        ki: 0.0
+    left_knee:
+        motor: XM430-W210
+        group: leg
+        zero_pos: 0
+        home_pos: -0.380812
+        kp: 2100.0
+        kd: 0.0
+        ki: 0.0
+    left_ankle_roll:
+        motor: XC430
+        group: leg
+        zero_pos: 0
+        home_pos: 0
+        kp: 1500.0
+        kd: 0.0
+        ki: 0.0
+    left_ankle_pitch:
+        motor: XM430-W210
+        group: leg
+        zero_pos: 0
+        home_pos: -0.2895
+        kp: 2100.0
+        kd: 0.0
+        ki: 0.0
+    right_hip_pitch:
+        motor: 2XC430
+        group: leg
+        zero_pos: 0
+        home_pos: 0.091312
+        kp: 2100.0
+        kd: 0.0
+        ki: 0.0
+    right_hip_roll:
+        motor: 2XC430
+        group: leg
+        zero_pos: 0
+        home_pos: 0
+        kp: 2100.0
+        kd: 0.0
+        ki: 0.0
+    right_hip_yaw_drive:
+        group: leg
+        motor: XC330
+        zero_pos: 0
+        home_pos: 0
+        kp: 1500.0
+        kd: 0.0
+        ki: 0.0
+    right_knee:
+        motor: XM430-W210
+        group: leg
+        zero_pos: 0
+        home_pos: 0.380812
+        kp: 2100.0
+        kd: 0.0
+        ki: 0.0
+    right_ankle_roll:
+        motor: XC430
+        group: leg
+        zero_pos: 0
+        home_pos: 0
+        kp: 1500.0
+        kd: 0.0
+        ki: 0.0
+    right_ankle_pitch:
+        motor: XM430-W210
+        group: leg
+        zero_pos: 0
+        home_pos: 0.2895
+        kp: 2100.0
+        kd: 0.0
+        ki: 0.0
+    left_shoulder_pitch:
+        motor: XC430
+        group: arm
+        zero_pos: 0
+        home_pos: 0.174533
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    left_shoulder_roll:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: 0.087266
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    left_shoulder_yaw_drive:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: 1.570796
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    left_elbow_roll:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: -0.523599
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    left_elbow_yaw_drive:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: -1.570796
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    left_wrist_pitch_drive:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: -1.22173
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    left_wrist_roll:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: 0
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    right_shoulder_pitch:
+        motor: XC430
+        group: arm
+        zero_pos: 0
+        home_pos: -0.174533
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    right_shoulder_roll:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: 0.087266
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    right_shoulder_yaw_drive:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: -1.570796
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    right_elbow_roll:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: -0.523599
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    right_elbow_yaw_drive:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: 1.570796
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    right_wrist_pitch_drive:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: 1.22173
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    right_wrist_roll:
+        motor: 2XL430
+        group: arm
+        zero_pos: 0
+        home_pos: 0
+        kp: 900.0
+        kd: 0.0
+        ki: 0.0
+    # left_gripper_rack:
+    #     motor: XC330
+    #     group: arm
+    #     zero_pos: 0
+    #     home_pos: 0
+    #     kp: 200.0
+    #     kd: 0.0
+    #     ki: 0.0
+    # right_gripper_rack:
+    #     motor: XC330
+    #     group: arm
+    #     zero_pos: 0
+    #     home_pos: 0
+    #     kp: 200.0
+    #     kd: 0.0
+    #     ki: 0.0
+
+actuators:
+    kp_ratio: 150.0
+    kd_ratio: 16.0
+    passive_active_ratio: 1.0
+    gain_backdrive: 1.0
+    XC330:
+        damping: 0.001
+        armature: 0.0048
+        frictionloss: 0.006
+        tau_max: 0.68
+        q_dot_max: 6.52
+        tau_q_dot_max: 0.49
+        q_dot_tau_max: 1.0
+        tau_brake_max: 1.54
+        kd_min: 0.341
+        kt: 0.8
+    XC430:
+        damping: 0.0072
+        armature: 0.0044
+        frictionloss: 0.014
+        tau_max: 1.47
+        q_dot_max: 7.0
+        tau_q_dot_max: 0.19
+        q_dot_tau_max: 1.2
+        tau_brake_max: 2.0
+        kd_min: 0.173
+        kv: 0.6101 # Tentative value
+        r_winding: 8.1665
+        kt: 0.778908
+    XM430-W350:
+        damping: 0.0133
+        armature: 0.0025
+        frictionloss: 0.105
+        tau_max: 2.95
+        q_dot_max: 4.55
+        tau_q_dot_max: 0.36
+        q_dot_tau_max: 0.5
+        tau_brake_max: 3.0
+        kd_min: 0.231
+        kt: 1.666667
+    XM430-W210:
+        damping: 0.0064
+        armature: 0.0022
+        frictionloss: 0.038
+        tau_max: 1.94
+        q_dot_max: 7.6
+        tau_q_dot_max: 0.4
+        q_dot_tau_max: 0.8
+        tau_brake_max: 2.2
+        kd_min: 0.183
+        kt: 1.053607
+    2XL430:
+        damping: 0.0013
+        armature: 0.0083
+        frictionloss: 0.069
+        tau_max: 0.93
+        q_dot_max: 5.97
+        tau_q_dot_max: 0.08
+        q_dot_tau_max: 2.0
+        tau_brake_max: 1.4
+        kd_min: 0.162
+    2XC430:
+        damping: 0.0028
+        armature: 0.0044
+        frictionloss: 0.06
+        tau_max: 1.09
+        q_dot_max: 6.78
+        tau_q_dot_max: 0.23
+        q_dot_tau_max: 2.0
+        tau_brake_max: 2.2
+        kd_min: 0.185
+        kv: 0.6101
+        r_winding: 8.1665
+        kt: 0.778908
+
+joints:
+    waist_roll:
+        damping: 0.5
+        armature: 0.002
+        frictionloss: 0.03
+
+    # TODO: sysID these joints
+    # waist_yaw:
+    #     damping: 0.1
+    #     armature: 0.0
+    #     frictionloss: 0.01
+
+    # hip_yaw_driven:
+    #     damping: 0.1
+    #     armature: 0.0
+    #     frictionloss: 0.1
+
+    # shoulder_yaw_driven:
+    #     damping: 0.1
+    #     armature: 0.0
+    #     frictionloss: 0.1
+
+    # elbow_yaw_driven:
+    #     damping: 0.1
+    #     armature: 0.0
+    #     frictionloss: 0.1
+
+    # wrist_pitch_driven:
+    #     damping: 0.1
+    #     armature: 0.0
+    #     frictionloss: 0.1
+
+collision:
+    torso:
+        pos: [[-0.025508, 0.0, 0.06], [-0.093008, 0.0, 0.01425]]
+        size: [[0.045, 0.065, 0.06], [0.0225, 0.01425, 0.01425]]
+    head:
+        pos: [-0.0105, -0.046416, -0.0035]
+        size: [0.035, 0.042, 0.03]
+    pelvis:
+        pos: [0.0, -0.035346, -0.02275]
+        size: [0.035, 0.06, 0.022169]
+    ankle_roll_link:
+        pos: [-0.032, 0, 0.039]
+        size: [0.055, 0.021, 0.007]
+    shoulder_yaw_link:
+        pos: [0, 0, 0.04425]
+        size: [0.023, 0.0129925, 0.027107]
+    elbow_yaw_link:
+        pos: [0.0, -0.00335, 0.04475]
+        size: [0.0129925, 0.02965, 0.027563]
+    left_hand:
+        pos: [0.0045, 0.047, -0.0205398]
+        size: [0.037, 0.025, 0.01]
+    right_hand:
+        pos: [-0.0045, -0.047, -0.0174602]
+        size: [0.037, 0.025, 0.01]
+    left_leader_hand:
+        pos: [0.0, 0.0465, -0.019]
+        size: [0.0315, 0.0105, 0.0125]
+    right_leader_hand:
+        pos: [0.0, -0.0465, -0.019]
+        size: [0.0315, 0.0105, 0.0125]
+    left_gripper_link:
+        pos: [-0.002925, -0.02885, -0.009]
+        size: [0.035, 0.024675, 0.01815]
+    right_gripper_link:
+        pos: [0.002925, 0.02885, -0.029]
+        size: [0.035, 0.024675, 0.01815]
+    gripper_finger:
+        pos: [[0.016125, -0.027, 0.0045]]
+        size: [[0.0045, 0.02035, 0.028]]
+
+contact:
+    torso_collision_0:
+        [
+            shoulder_yaw_link,
+            elbow_roll_link,
+            elbow_yaw_link,
+            wrist_pitch_link,
+            hand,
+        ]
+    torso_collision_1: [elbow_yaw_link, wrist_pitch_link, hand]
+    head:
+        [
+            shoulder_yaw_link,
+            elbow_roll_link,
+            elbow_yaw_link,
+            wrist_pitch_link,
+            hand,
+        ]
+    pelvis: [elbow_yaw_link, wrist_pitch_link, hand]
+    left_hip_pitch_link:
+        [
+            left_ankle_pitch_link,
+            left_elbow_yaw_link,
+            left_wrist_pitch_link,
+            left_hand,
+        ]
+    right_hip_pitch_link:
+        [
+            right_ankle_pitch_link,
+            right_elbow_yaw_link,
+            right_wrist_pitch_link,
+            right_hand,
+        ]
+    left_hip_yaw_link:
+        [
+            right_hip_yaw_link,
+            left_elbow_yaw_link,
+            left_wrist_pitch_link,
+            left_hand,
+        ]
+    right_hip_yaw_link:
+        [right_elbow_yaw_link, right_wrist_pitch_link, right_hand]
+    left_knee_link: [right_knee_link, left_hand]
+    right_knee_link: [right_hand]
+    left_ankle_pitch_link: [right_ankle_pitch_link, left_hand]
+    right_ankle_pitch_link: [right_hand]
+    left_ankle_roll_link: [right_ankle_roll_link, left_hand]
+    right_ankle_roll_link: [right_hand]
+    left_elbow_yaw_link:
+        [right_elbow_yaw_link, right_wrist_pitch_link, right_hand]
+    left_wrist_pitch_link:
+        [right_elbow_yaw_link, right_wrist_pitch_link, right_hand]
+    left_hand: [right_elbow_yaw_link, right_wrist_pitch_link, right_hand]

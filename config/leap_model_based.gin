@@ -1,0 +1,6 @@
+include "config/leap.gin"
+
+# Model-based LEAP uses the object scene.
+WrenchSimConfig.xml_path = "descriptions/leap_hand/scene_object_fixed.xml"
+ControllerConfig.xml_path = "descriptions/leap_hand/scene_object_fixed.xml"
+

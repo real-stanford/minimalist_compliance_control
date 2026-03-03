@@ -1,0 +1,119 @@
+# Minimal compliance config for toddlerbot floating-base model-based policy
+
+# Wrench simulation
+WrenchSimConfig.xml_path = "descriptions/toddlerbot_2xm/scene.xml"
+WrenchSimConfig.site_names = ("left_hand_center", "right_hand_center")
+WrenchSimConfig.fixed_base = False
+WrenchSimConfig.view = True
+WrenchSimConfig.render = False
+
+# Controller config
+ControllerConfig.xml_path = "descriptions/toddlerbot_2xm/scene.xml"
+ControllerConfig.site_names = ("left_hand_center", "right_hand_center")
+ControllerConfig.fixed_base = False
+ControllerConfig.joint_names_by_site = {
+    "left_hand_center": (
+        "left_shoulder_pitch",
+        "left_shoulder_roll",
+        "left_shoulder_yaw_driven",
+        "left_elbow_roll",
+        "left_elbow_yaw_driven",
+        "left_wrist_pitch_driven",
+        "left_wrist_roll",
+    ),
+    "right_hand_center": (
+        "right_shoulder_pitch",
+        "right_shoulder_roll",
+        "right_shoulder_yaw_driven",
+        "right_elbow_roll",
+        "right_elbow_yaw_driven",
+        "right_wrist_pitch_driven",
+        "right_wrist_roll",
+    ),
+}
+ControllerConfig.motor_names_by_site = {
+    "left_hand_center": (
+        "left_shoulder_pitch",
+        "left_shoulder_roll",
+        "left_shoulder_yaw_drive",
+        "left_elbow_roll",
+        "left_elbow_yaw_drive",
+        "left_wrist_pitch_drive",
+        "left_wrist_roll",
+    ),
+    "right_hand_center": (
+        "right_shoulder_pitch",
+        "right_shoulder_roll",
+        "right_shoulder_yaw_drive",
+        "right_elbow_roll",
+        "right_elbow_yaw_drive",
+        "right_wrist_pitch_drive",
+        "right_wrist_roll",
+    ),
+}
+ControllerConfig.gear_ratios_by_site = {
+    "left_hand_center": (1, 1, -1, 1, -1, -1, 1),
+    "right_hand_center": (1, 1, -1, 1, -1, -1, 1),
+}
+ControllerConfig.base_body_name = "torso"
+ControllerConfig.motor_torque_ema_alpha = 0.1
+
+# Wrench estimation
+WrenchEstimateConfig.force_reg = 1e-3
+WrenchEstimateConfig.torque_reg = 1e-2
+WrenchEstimateConfig.force_only = False
+WrenchEstimateConfig.axis_aligned = False
+WrenchEstimateConfig.normal_axis = "+z"
+
+# Compliance reference (floating base)
+RefConfig.dt = 0.02
+RefConfig.mass = 1.0
+RefConfig.inertia_diag = (1.0, 1.0, 1.0)
+RefConfig.fixed_model_xml_path = "descriptions/toddlerbot_2xm/toddlerbot_2xm_fixed.xml"
+IKConfig.ik_position_only = False
+IKConfig.mink_num_iter = 1
+IKConfig.mink_damping = 0.1
+IKConfig.avoid_self_collision = True
+RefConfig.default_motor_pos = (0.0, 0.0, 0.0, 0.0, -0.0913, 0.0, 0.0, -0.3808, 0.0, -0.2895, 0.0913, 0.0, 0.0, 0.3808, 0.0, 0.2895, 0.1745, 0.0873, 1.5708, -0.5236, -1.5708, -1.2217, 0.0, -0.1745, 0.0873, -1.5708, -0.5236, 1.5708, 1.2217, 0.0)
+RefConfig.default_qpos = (0.0222, 0.0, 0.3092, 1.0, 0.0, 0.0, 0.0, 0.0, -0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.0913, 0.0, -0.0, 0.0, -0.3808, -0.2895, 0.0, 0.0913, 0.0, -0.0, 0.0, 0.3808, 0.2895, 0.0, 0.1745, 0.0873, 1.5708, -1.5708, -0.5236, -1.5708, 1.5708, 1.2217, -1.2217, 0.0, -0.1745, 0.0873, -1.5708, 1.5708, -0.5236, 1.5708, -1.5708, -1.2217, 1.2217, 0.0)
+RefConfig.joint_to_actuator_scale = (1, 1, -1, 1, -1, -1, 1, 1, 1, -1, 1, -1, -1, 1)
+RefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+IKConfig.collision_pairs = (
+    (
+        (
+            "left_shoulder_yaw_link_collision",
+            "left_elbow_roll_link_collision",
+            "left_elbow_yaw_link_collision",
+            "left_wrist_pitch_link_collision",
+            "left_hand_collision",
+            "right_shoulder_yaw_link_collision",
+            "right_elbow_roll_link_collision",
+            "right_elbow_yaw_link_collision",
+            "right_wrist_pitch_link_collision",
+            "right_hand_collision",
+        ),
+        ("torso_collision_0",),
+    ),
+    (
+        (
+            "left_elbow_yaw_link_collision",
+            "left_wrist_pitch_link_collision",
+            "left_hand_collision",
+            "right_elbow_yaw_link_collision",
+            "right_wrist_pitch_link_collision",
+            "right_hand_collision",
+        ),
+        ("pelvis_link_collision",),
+    ),
+)
+
+# Compliance policy fields
+ComplianceConfig.kp_pos = 100.0
+ComplianceConfig.kp_rot = 10.0
+ComplianceConfig.use_compliance = True
+ComplianceConfig.perturb_force_max = 3.0
+
+# Motor config paths
+MotorConfigPaths.default_config_path = "descriptions/default.yml"
+MotorConfigPaths.robot_config_path = "descriptions/toddlerbot_2xm/robot.yml"
+MotorConfigPaths.motor_config_path = "descriptions/toddlerbot_2xm/motors.yml"

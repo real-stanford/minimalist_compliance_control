@@ -1,0 +1,8 @@
+include "config/toddlerbot.gin"
+
+# Overrides for toddlerbot model-based policy.
+
+WrenchSimConfig.xml_path = "descriptions/toddlerbot_2xm/scene_ball.xml"
+ControllerConfig.xml_path = "descriptions/toddlerbot_2xm/scene_ball.xml"
+RefConfig.default_qpos = (0.0222, 0.0, 0.3092, 1.0, 0.0, 0.0, 0.0, 0.0, -0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.0913, 0.0, -0.0, 0.0, -0.3808, -0.2895, 0.0, 0.0913, 0.0, -0.0, 0.0, 0.3808, 0.2895, 0.0, 0.1745, 0.0873, 1.5708, -1.5708, -0.5236, -1.5708, 1.5708, 1.2217, -1.2217, 0.0, -0.1745, 0.0873, -1.5708, 1.5708, -0.5236, 1.5708, -1.5708, -1.2217, 1.2217, 0.0, 0.2450, -0.0150, 0.0950, 1.0, 0.0, 0.0, 0.0)
+PolicyConfig.print_ochs_world_velocity = False

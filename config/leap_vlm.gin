@@ -1,0 +1,20 @@
+include "config/leap.gin"
+
+# VLM-specific LEAP XML overrides (draw configuration)
+WrenchSimConfig.xml_path = "descriptions/leap_hand/left_hand_draw_fixed.xml"
+ControllerConfig.xml_path = "descriptions/leap_hand/left_hand_draw_fixed.xml"
+RefConfig.fixed_model_xml_path = "descriptions/leap_hand/left_hand_draw_fixed.xml"
+ComplianceConfig.head_name = "palm_root"
+
+# VLM-specific compliance policy fields
+ComplianceConfig.ref_motor_pos = (
+    2.23, 0.0, 0.0, 0.4,
+    2.23, 0.0, 0.0, 0.4,
+    2.23, 0.0, 0.0, 0.4,
+    0.0, -1.57, 0.0, 0.0,
+)
+ComplianceConfig.kp_pos_normal = 20.0
+ComplianceConfig.kp_pos_tangent = 200.0
+ComplianceConfig.kp_rot_normal = 10.0
+ComplianceConfig.kp_rot_tangent = 20.0
+ComplianceConfig.fixed_contact_force = 0.2

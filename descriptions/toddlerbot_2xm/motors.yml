@@ -1,0 +1,61 @@
+motors:
+    left_shoulder_pitch:
+        zero_pos: -1.56466
+    left_shoulder_roll:
+        zero_pos: 1.61068
+    left_shoulder_yaw_drive:
+        zero_pos: -0.662679
+    left_elbow_roll:
+        zero_pos: 1.541651
+    left_elbow_yaw_drive:
+        zero_pos: -1.451145
+    left_wrist_pitch_drive:
+        zero_pos: 0.102777
+    left_wrist_roll:
+        zero_pos: 3.098642
+    right_shoulder_pitch:
+        zero_pos: -2.842467
+    right_shoulder_roll:
+        zero_pos: -3.135748
+    right_shoulder_yaw_drive:
+        zero_pos: -0.917321
+    right_elbow_roll:
+        zero_pos: 1.574376
+    right_elbow_yaw_drive:
+        zero_pos: 1.975767
+    right_wrist_pitch_drive:
+        zero_pos: -0.372757
+    right_wrist_roll:
+        zero_pos: -0.004601
+    neck_yaw_drive:
+        zero_pos: -0.720971
+    neck_pitch_act:
+        zero_pos: 0.750117
+    waist_act_1:
+        zero_pos: 3.018874
+    waist_act_2:
+        zero_pos: 2.144505
+    left_hip_pitch:
+        zero_pos: -2.353127
+    left_hip_roll:
+        zero_pos: 3.126253
+    left_hip_yaw_drive:
+        zero_pos: 0.604388
+    left_knee:
+        zero_pos: 1.671657
+    right_hip_pitch:
+        zero_pos: 2.359263
+    right_hip_roll:
+        zero_pos: -3.126253
+    right_hip_yaw_drive:
+        zero_pos: -0.685689
+    right_knee:
+        zero_pos: 1.291227
+    left_ankle_roll:
+        zero_pos: 3.135457
+    left_ankle_pitch:
+        zero_pos: 0.008015
+    right_ankle_roll:
+        zero_pos: 3.141593
+    right_ankle_pitch:
+        zero_pos: -2.783753

@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<mujoco model="toddlerbot_2xm_ball_scene">
+  <include file="toddlerbot_2xm_model_based.xml"/>
+  <statistic center="0 0 0.25" extent="0.6"/>
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="160" elevation="-20" offwidth="1280" offheight="720"/>
+  </visual>
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" condim="3"/>
+    <body name="rolling_ball" pos="0.24 -0.0 0.08">
+      <freejoint name="rolling_ball_joint"/>
+      <geom name="rolling_ball_geom" type="sphere" size="0.08" material="rolling_ball" mass="0.2" friction="0.8 0.0 0.0"
+        class="visual"/>
+    </body>
+  </worldbody>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.0"/>
+
+    <!-- Ball texture with two colors for rotation visualization -->
+    <texture type="2d" name="ball_texture" builtin="checker" rgb1="0.9 0.1 0.1" rgb2="1 1 1" width="512" height="512"/>
+    <material name="rolling_ball" texture="ball_texture" texuniform="false" reflectance="0.3"/>
+  </asset>
+  <sensor>
+    <framepos objtype="body" objname="rolling_ball" name="rolling_ball_framepos"/>
+    <framequat objtype="body" objname="rolling_ball" name="rolling_ball_framequat"/>
+    <framelinvel objtype="body" objname="rolling_ball" name="rolling_ball_framelinvel"/>
+    <frameangvel objtype="body" objname="rolling_ball" name="rolling_ball_frameangvel"/>
+  </sensor>
+  <contact>
+    <pair geom1="floor" geom2="torso_collision_0"/>
+    <pair geom1="floor" geom2="torso_collision_1"/>
+    <pair geom1="floor" geom2="head_collision"/>
+    <pair geom1="floor" geom2="pelvis_link_collision"/>
+    <pair geom1="floor" geom2="left_hip_pitch_link_collision"/>
+    <pair geom1="floor" geom2="left_hip_yaw_link_collision"/>
+    <pair geom1="floor" geom2="left_knee_link_collision"/>
+    <pair geom1="floor" geom2="left_ankle_pitch_link_collision"/>
+    <pair geom1="floor" geom2="left_ankle_roll_link_collision"/>
+    <pair geom1="floor" geom2="right_hip_pitch_link_collision"/>
+    <pair geom1="floor" geom2="right_hip_yaw_link_collision"/>
+    <pair geom1="floor" geom2="right_knee_link_collision"/>
+    <pair geom1="floor" geom2="right_ankle_pitch_link_collision"/>
+    <pair geom1="floor" geom2="right_ankle_roll_link_collision"/>
+    <pair geom1="floor" geom2="left_shoulder_roll_link_collision"/>
+    <pair geom1="floor" geom2="left_shoulder_yaw_link_collision"/>
+    <pair geom1="floor" geom2="left_elbow_roll_link_collision"/>
+    <pair geom1="floor" geom2="left_elbow_yaw_link_collision"/>
+    <pair geom1="floor" geom2="left_wrist_pitch_link_collision"/>
+    <pair geom1="floor" geom2="left_hand_collision"/>
+    <pair geom1="floor" geom2="right_shoulder_roll_link_collision"/>
+    <pair geom1="floor" geom2="right_shoulder_yaw_link_collision"/>
+    <pair geom1="floor" geom2="right_elbow_roll_link_collision"/>
+    <pair geom1="floor" geom2="right_elbow_yaw_link_collision"/>
+    <pair geom1="floor" geom2="right_wrist_pitch_link_collision"/>
+    <pair geom1="floor" geom2="right_hand_collision"/>
+    <pair geom1="floor" geom2="rolling_ball_geom" friction="0.8 0.8 0.0" solref="0.001 1" solimp="0.9 0.95 0.001"/>
+    <pair geom1="left_hand_collision" geom2="rolling_ball_geom" friction="0.8 0.8 0.0" solref="0.001 1"
+      solimp="0.9 0.95 0.001"/>
+    <pair geom1="right_hand_collision" geom2="rolling_ball_geom" friction="0.8 0.8 0.0" solref="0.001 1"
+      solimp="0.9 0.95 0.001"/>
+    <pair geom1="left_hip_pitch_link_collision" geom2="rolling_ball_geom" friction="0.8 0.8 0.0" solref="0.001 1"
+      solimp="0.9 0.95 0.001"/>
+    <pair geom1="left_hip_yaw_link_collision" geom2="rolling_ball_geom" friction="0.8 0.8 0.0" solref="0.001 1"
+      solimp="0.9 0.95 0.001"/>
+    <pair geom1="right_hip_pitch_link_collision" geom2="rolling_ball_geom" friction="0.8 0.8 0.0" solref="0.001 1"
+      solimp="0.9 0.95 0.001"/>
+    <pair geom1="right_hip_yaw_link_collision" geom2="rolling_ball_geom" friction="0.8 0.8 0.0" solref="0.001 1"
+      solimp="0.9 0.95 0.001"/>
+  </contact>
+</mujoco>

@@ -1,0 +1,93 @@
+# Minimal compliance config for Unitree G1 floating-base dual-palm policy.
+
+# Wrench simulation
+WrenchSimConfig.xml_path = "descriptions/unitree_g1/scene.xml"
+WrenchSimConfig.site_names = ("left_palm", "right_palm")
+WrenchSimConfig.fixed_base = False
+WrenchSimConfig.view = True
+WrenchSimConfig.render = False
+
+# Controller config
+ControllerConfig.xml_path = "descriptions/unitree_g1/scene.xml"
+ControllerConfig.site_names = ("left_palm", "right_palm")
+ControllerConfig.fixed_base = False
+ControllerConfig.joint_names_by_site = {
+    "left_palm": (
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint",
+    ),
+    "right_palm": (
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint",
+    ),
+}
+ControllerConfig.motor_names_by_site = {
+    "left_palm": (
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint",
+    ),
+    "right_palm": (
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint",
+    ),
+}
+ControllerConfig.gear_ratios_by_site = {
+    "left_palm": (1, 1, 1, 1, 1, 1, 1),
+    "right_palm": (1, 1, 1, 1, 1, 1, 1),
+}
+ControllerConfig.base_body_name = "pelvis"
+ControllerConfig.motor_torque_ema_alpha = 0.1
+
+# Wrench estimation
+WrenchEstimateConfig.force_reg = 1e-3
+WrenchEstimateConfig.torque_reg = 1e-2
+WrenchEstimateConfig.force_only = False
+WrenchEstimateConfig.axis_aligned = False
+WrenchEstimateConfig.normal_axis = "+z"
+
+# Compliance reference (floating base)
+RefConfig.dt = 0.02
+RefConfig.mass = 1.0
+RefConfig.inertia_diag = (1.0, 1.0, 1.0)
+RefConfig.fixed_model_xml_path = "descriptions/unitree_g1/g1_fixed.xml"
+IKConfig.ik_position_only = False
+IKConfig.mink_num_iter = 1
+IKConfig.mink_damping = 0.1
+IKConfig.avoid_self_collision = False
+RefConfig.joint_to_actuator_scale = (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+RefConfig.joint_to_actuator_bias = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+# Compliance policy fields
+ComplianceConfig.kp_pos = 100.0
+ComplianceConfig.kp_rot = 10.0
+ComplianceConfig.use_compliance = True
+ComplianceConfig.perturb_force_max = 10.0
+
+# G1 real-world motor PD gains
+G1GainConfig.kp = 100.0
+G1GainConfig.kd = 1.0
+
+# Motor config paths
+MotorConfigPaths.default_config_path = "descriptions/default.yml"
+MotorConfigPaths.robot_config_path = "descriptions/unitree_g1/robot.yml"
+MotorConfigPaths.motor_config_path = None

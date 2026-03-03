@@ -1,0 +1,15 @@
+include "config/toddlerbot.gin"
+
+# VLM-specific compliance policy fields
+ComplianceConfig.head_name = "head"
+ComplianceConfig.ref_motor_pos = (
+    0.0, 0.5235987756, 0.0, 0.0, -0.0913, 0.0, 0.0, -0.3808, 0.0, -0.2895,
+    0.0913, 0.0, 0.0, 0.3808, 0.0, 0.2895, 0.1745, 0.0873, 1.5708, -0.5236,
+    -1.5708, -1.2217, 0.0, -0.1745, 0.0873, -1.5708, -0.5236, 1.5708, 1.2217,
+    0.0,
+)
+ComplianceConfig.kp_pos_normal = 80.0
+ComplianceConfig.kp_pos_tangent = 400.0
+ComplianceConfig.kp_rot_normal = 40.0
+ComplianceConfig.kp_rot_tangent = 40.0
+ComplianceConfig.fixed_contact_force = 5.0

@@ -1,0 +1,48 @@
+# Minimal compliance config for ARX arm (fixed base, single EE site)
+
+# Wrench simulation
+WrenchSimConfig.xml_path = "descriptions/arx_arm/scene_fixed.xml"
+WrenchSimConfig.site_names = ("ee_site",)
+WrenchSimConfig.fixed_base = True
+WrenchSimConfig.view = True
+WrenchSimConfig.render = False
+
+# Controller config
+ControllerConfig.xml_path = "descriptions/arx_arm/scene_fixed.xml"
+ControllerConfig.site_names = ("ee_site",)
+ControllerConfig.fixed_base = True
+ControllerConfig.joint_names_by_site = None
+ControllerConfig.motor_names_by_site = None
+ControllerConfig.gear_ratios_by_site = None
+ControllerConfig.base_body_name = ""
+ControllerConfig.motor_torque_ema_alpha = 0.1
+
+# Wrench estimation
+WrenchEstimateConfig.force_reg = 1e-3
+WrenchEstimateConfig.torque_reg = 1e-2
+WrenchEstimateConfig.force_only = False
+WrenchEstimateConfig.axis_aligned = False
+WrenchEstimateConfig.normal_axis = "+z"
+
+# Compliance reference (fixed base)
+RefConfig.dt = 0.02
+RefConfig.mass = 1.0
+RefConfig.inertia_diag = (1.0, 1.0, 1.0)
+IKConfig.ik_position_only = False
+IKConfig.mink_num_iter = 1
+IKConfig.mink_damping = 0.1
+IKConfig.avoid_self_collision = False
+
+# Compliance policy fields
+ComplianceConfig.kp_pos = 100.0
+ComplianceConfig.kp_rot = 10.0
+ComplianceConfig.initial_pose = (
+    (0.3, 0.0, 0.3, 0.0, 0.0, 0.0),
+)
+ComplianceConfig.use_compliance = True
+ComplianceConfig.perturb_force_max = 10.0
+
+# Motor config paths
+MotorConfigPaths.default_config_path = "descriptions/default.yml"
+MotorConfigPaths.robot_config_path = "descriptions/arx_arm/robot.yml"
+MotorConfigPaths.motor_config_path = None

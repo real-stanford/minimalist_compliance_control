@@ -1,0 +1,127 @@
+motors:
+    if_mcp:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    if_rot:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    if_pip:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    if_dip:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    mf_mcp:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    mf_rot:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    mf_pip:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    mf_dip:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    rf_mcp:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    rf_rot:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    rf_pip:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    rf_dip:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    th_cmc:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    th_axl:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    th_mcp:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+    th_ipl:
+        motor: XC330
+        group: arm
+        zero_pos: 0.0
+        home_pos: 0.0
+        kp: 900.0
+        kd: 0.0
+
+actuators:
+    gain_backdrive: 5.0
+    XC330:
+        damping: 0.001
+        armature: 0.0048
+        frictionloss: 0.006
+        tau_max: 0.68
+        q_dot_max: 6.52
+        tau_q_dot_max: 0.49
+        q_dot_tau_max: 1.0
+        tau_brake_max: 1.54
+        kd_min: 0.341
+        kt: 0.333 # XC330-M288-T
