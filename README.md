@@ -141,13 +141,19 @@ For ToddlerBot, LEAP, and Unitree G1, real-world support is included in this rep
 - [Locomotion Beyond Feet](https://locomotion-beyond-feet.github.io/)
 
 ## Citation
-Until the paper URL is published on the project page, you can cite the project page entry:
 ```bibtex
-@misc{shi2026minimalist_compliance_control,
-  title        = {Minimalist Compliance Control},
-  author       = {Shi, Haochen and Hu, Songbo and Hou, Yifan and Wang, Weizhuo and Liu, C. Karen and Song, Shuran},
-  year         = {2026},
-  howpublished = {\url{https://minimalist-compliance-control.github.io/}},
-  note         = {Project page}
+@misc{shi2026minimalist,
+  title = {Minimalist {{Compliance Control}}},
+  author = {Shi, Haochen and Hu, Songbo and Hou, Yifan and Wang, Weizhuo and Liu, Karen and Song, Shuran},
+  year = 2026,
+  month = mar,
+  number = {arXiv:2603.00913},
+  eprint = {2603.00913},
+  primaryclass = {cs},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2603.00913},
+  urldate = {2026-03-03},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Robotics}
 }
 ```
